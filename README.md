@@ -35,8 +35,10 @@ python scripts/generate_synthetic_data.py
 ```
 
 Sono prodotti `customers.csv`, `products.csv` e `orders.csv` sotto `run_1/`,
-oltre a `orders.csv` sotto `run_2/` e `run_3/`. I valori nulli sono serializzati
-come campi CSV vuoti. Le opzioni principali sono:
+oltre a `orders.csv` sotto `run_2/`, `run_3/` e `run_3/late_arriving/`.
+Quest'ultimo file contiene il batch late-arriving, separato dal Run 3
+ordinario. I valori nulli sono serializzati come campi CSV vuoti. Le opzioni
+principali sono:
 
 ```bash
 python scripts/generate_synthetic_data.py \
@@ -45,7 +47,7 @@ python scripts/generate_synthetic_data.py \
   --force
 ```
 
-`--force` sostituisce soltanto i cinque CSV gestiti dal generatore. A parità di
+`--force` sostituisce soltanto i sei CSV gestiti dal generatore. A parità di
 seed, schema, ordine e contenuto dei file sono byte-identici.
 
 Per eseguire i test automatici:
