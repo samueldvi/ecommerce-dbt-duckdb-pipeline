@@ -18,12 +18,13 @@ profiles.yml
 # DuckDB
 *.duckdb
 *.duckdb.wal
+*.duckdb.tmp
 
 # Variabili e configurazioni locali
 .env
 .env.*
 !.env.example
-!.profiles.yml.example
+!profiles.yml.example
 
 # Editor e sistema operativo
 .vscode/
