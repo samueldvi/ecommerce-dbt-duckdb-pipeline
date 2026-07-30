@@ -1,0 +1,130 @@
+version: 1
+
+order_lines:
+  unique_key: order_line_id
+  runs:
+    run_1:
+      input_rows:
+        exact: 3000
+      inserts:
+        exact: 3000
+      corrections:
+        exact: 0
+      expected_updates:
+        exact: 0
+      cumulative_distinct_keys:
+        exact: 3000
+      order_date:
+        min: "2025-01-01"
+        max: "2025-01-10"
+
+    run_2:
+      input_rows:
+        exact: 2000
+      inserts:
+        exact: 2000
+      corrections:
+        exact: 0
+      expected_updates:
+        exact: 0
+      cumulative_distinct_keys:
+        exact: 5000
+      order_date:
+        min: "2025-01-11"
+        max: "2025-01-20"
+      schema_evolution:
+        added_column: sales_channel
+        nullable: true
+        prior_rows_value: null
+
+    run_3:
+      input_rows:
+        exact: 15
+      file_distinct_keys:
+        exact: 15
+      new_keys:
+        exact: 10
+      existing_keys:
+        exact: 5
+        origin_run: run_1
+      inserts:
+        exact: 10
+      corrections:
+        exact: 5
+      corrections_target_run: run_1
+      expected_updates:
+        exact: 5
+      cumulative_distinct_keys:
+        exact: 5010
+      late_insert_order_date:
+        min: "2025-01-01"
+        max: "2025-01-10"
+
+  final:
+    distinct_keys:
+      exact: 5010
+    duplicate_keys:
+      exact: 0
+    updated_existing_keys:
+      exact: 5
+
+master_data:
+  customers:
+    appears_in:
+      - run_1
+    load_mode: full_snapshot_once
+    input_rows:
+      min: 1
+    current_version_order:
+      - updated_at_desc
+      - canonical_payload_desc
+  products:
+    appears_in:
+      - run_1
+    load_mode: full_snapshot_once
+    input_rows:
+      min: 1
+    current_version_order:
+      - canonical_payload_desc
+
+invariants:
+  order_line_grain:
+    columns:
+      - order_line_id
+    final_unique: true
+  idempotent_reprocessing: true
+  corrections_change_at_least_one:
+    - quantity
+    - unit_price
+  cancelled_orders:
+    required_occurrences:
+      min: 1
+    retained_in_fact: true
+    included_in_revenue: false
+  out_of_domain_order_status:
+    condition: "order_status not in ('completed', 'cancelled')"
+    blocks_file_or_run: false
+    retained_in_fact: true
+    economically_valid: false
+    included_in_revenue: false
+  invalid_unit_price:
+    condition: "unit_price is null or unit_price <= 0"
+    required_occurrences:
+      min: 1
+    retained_in_fact: true
+    included_in_revenue: false
+  orphan_dimension_keys:
+    dimension_scope:
+      - customer
+      - product
+    required_occurrences_across_scope:
+      min: 1
+    retained_in_fact: true
+    resolved_to_unknown: true
+  customer_current_version_deterministic: true
+  raw_errors_preserved: true
+  monetary_type: "DECIMAL(12,2)"
+  timestamp:
+    timezone: UTC
+    precision: microseconds
+    format: "YYYY-MM-DDTHH:MM:SS.ffffffZ"

@@ -4,6 +4,9 @@ Pipeline analitica incrementale per dati e-commerce, sviluppata con dbt e DuckDB
 
 Il progetto costruisce un modello dimensionale e simula più caricamenti per gestire dati incrementali, late-arriving data, correzioni di record già acquisiti ed evoluzione dello schema.
 
+I contratti dei dataset e le regole funzionali sono descritti nella
+[documentazione dei contratti](docs/data_contracts.md).
+
 ## Configurazione locale
 
 Creare e attivare l'ambiente virtuale, quindi installare le dipendenze:
