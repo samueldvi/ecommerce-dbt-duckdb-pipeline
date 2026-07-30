@@ -12,7 +12,7 @@ import time
 import traceback
 import unittest
 from collections import Counter
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from unittest.mock import patch
@@ -42,6 +42,7 @@ EXPECTED_FILES = (
     Path("run_1/orders.csv"),
     Path("run_2/orders.csv"),
     Path("run_3/orders.csv"),
+    Path("run_3/late_arriving/orders.csv"),
 )
 CUSTOMER_COLUMNS = (
     "customer_id",
@@ -67,8 +68,9 @@ EXPECTED_SCHEMAS = {
     Path("run_1/customers.csv"): CUSTOMER_COLUMNS,
     Path("run_1/products.csv"): PRODUCT_COLUMNS,
     Path("run_1/orders.csv"): ORDER_BASE_COLUMNS,
-    Path("run_2/orders.csv"): ORDER_EVOLVED_COLUMNS,
+    Path("run_2/orders.csv"): ORDER_BASE_COLUMNS,
     Path("run_3/orders.csv"): ORDER_EVOLVED_COLUMNS,
+    Path("run_3/late_arriving/orders.csv"): ORDER_BASE_COLUMNS,
 }
 ALLOWED_ORDER_STATUSES = frozenset({"completed", "cancelled"})
 ALLOWED_SALES_CHANNELS = frozenset({"web", "mobile", "marketplace"})
@@ -84,15 +86,33 @@ TIMESTAMP_PATTERN = re.compile(
     r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z"
 )
 
-RUN_METRICS = CONTRACT_METRICS["order_lines"]["runs"]
-RUN_1_COUNT = RUN_METRICS["run_1"]["input_rows"]["exact"]
-RUN_2_COUNT = RUN_METRICS["run_2"]["input_rows"]["exact"]
-RUN_3_COUNT = RUN_METRICS["run_3"]["input_rows"]["exact"]
-RUN_3_INSERTS = RUN_METRICS["run_3"]["inserts"]["exact"]
-RUN_3_CORRECTIONS = RUN_METRICS["run_3"]["corrections"]["exact"]
+ORDER_LINE_METRICS = CONTRACT_METRICS["order_lines"]
+RUN_METRICS = ORDER_LINE_METRICS["runs"]
+INITIAL_COUNT = ORDER_LINE_METRICS["initial_dataset"]["input_rows"]["exact"]
+RUN_1_COUNT = 3_000
+RUN_2_COUNT = 1_000
+RUN_3_COUNT = 1_000
+LATE_METRICS = RUN_METRICS["run_3"]["late_arriving"]
+LATE_COUNT = LATE_METRICS["input_rows"]["exact"]
+LATE_INSERTS = LATE_METRICS["inserts"]["exact"]
+LATE_CORRECTIONS = LATE_METRICS["corrections"]["exact"]
 FINAL_DISTINCT = CONTRACT_METRICS["order_lines"]["final"]["distinct_keys"][
     "exact"
 ]
+CUSTOMER_DISTINCT = CONTRACT_METRICS["master_data"]["customers"][
+    "distinct_keys"
+]["exact"]
+PRODUCT_DISTINCT = CONTRACT_METRICS["master_data"]["products"][
+    "distinct_keys"
+]["exact"]
+VERSIONED_CUSTOMER_RANGE = CONTRACT_METRICS["master_data"]["customers"][
+    "keys_with_multiple_versions"
+]
+MIN_MULTI_LINE_RATIO = Decimal(
+    str(
+        CONTRACT_METRICS["invariants"]["multi_line_orders"]["ratio"]["min"]
+    )
+)
 
 
 def read_csv(path: Path) -> tuple[tuple[str, ...], list[dict[str, str]]]:
@@ -164,11 +184,16 @@ def quality_keys(rows: list[dict[str, str]]) -> dict[str, set[str]]:
             for row in rows
             if row["unit_price"] == ""
         },
-        "non_positive_price": {
+        "negative_price": {
             row["order_line_id"]
             for row in rows
             if row["unit_price"]
-            and Decimal(row["unit_price"]) <= Decimal("0.00")
+            and Decimal(row["unit_price"]) < Decimal("0.00")
+        },
+        "zero_price": {
+            row["order_line_id"]
+            for row in rows
+            if row["unit_price"] == "0.00"
         },
         "invalid_status": {
             row["order_line_id"]
@@ -186,6 +211,15 @@ def quality_keys(rows: list[dict[str, str]]) -> dict[str, set[str]]:
             if row["product_id"] not in product_keys
         },
     }
+
+
+def group_rows_by_order(
+    rows: list[dict[str, str]],
+) -> dict[str, list[dict[str, str]]]:
+    grouped: dict[str, list[dict[str, str]]] = {}
+    for row in rows:
+        grouped.setdefault(row["order_id"], []).append(row)
+    return grouped
 
 
 def run_paused_generation(
@@ -501,6 +535,9 @@ class SyntheticDataGeneratorTests(unittest.TestCase):
         cls.run_1 = read_csv(cls.output_root / "run_1/orders.csv")[1]
         cls.run_2 = read_csv(cls.output_root / "run_2/orders.csv")[1]
         cls.run_3 = read_csv(cls.output_root / "run_3/orders.csv")[1]
+        cls.late_arriving = read_csv(
+            cls.output_root / "run_3/late_arriving/orders.csv"
+        )[1]
 
     @classmethod
     def tearDownClass(cls) -> None:
@@ -513,11 +550,13 @@ class SyntheticDataGeneratorTests(unittest.TestCase):
             raise AssertionError("Tests wrote to the repository data directory.")
 
     def test_contract_metrics_are_loaded_from_normative_yaml(self) -> None:
-        self.assertEqual(RUN_1_COUNT, 3_000)
-        self.assertEqual(RUN_2_COUNT, 2_000)
-        self.assertEqual(RUN_3_COUNT, 15)
-        self.assertEqual(RUN_3_INSERTS, 10)
-        self.assertEqual(RUN_3_CORRECTIONS, 5)
+        self.assertEqual(INITIAL_COUNT, 5_000)
+        self.assertEqual(CUSTOMER_DISTINCT, 200)
+        self.assertEqual(PRODUCT_DISTINCT, 80)
+        self.assertEqual(VERSIONED_CUSTOMER_RANGE, {"min": 3, "max": 4})
+        self.assertEqual(LATE_COUNT, 15)
+        self.assertEqual(LATE_INSERTS, 10)
+        self.assertEqual(LATE_CORRECTIONS, 5)
         self.assertEqual(FINAL_DISTINCT, 5_010)
 
     def test_default_generation_and_exact_file_set(self) -> None:
@@ -538,23 +577,35 @@ class SyntheticDataGeneratorTests(unittest.TestCase):
         self.assertEqual(len(self.run_1), RUN_1_COUNT)
         self.assertEqual(len(self.run_2), RUN_2_COUNT)
         self.assertEqual(len(self.run_3), RUN_3_COUNT)
+        self.assertEqual(len(self.late_arriving), LATE_COUNT)
         run_1_keys = {row["order_line_id"] for row in self.run_1}
         run_2_keys = {row["order_line_id"] for row in self.run_2}
         run_3_keys = {row["order_line_id"] for row in self.run_3}
+        late_keys = {
+            row["order_line_id"] for row in self.late_arriving
+        }
         self.assertEqual(len(run_1_keys), RUN_1_COUNT)
         self.assertEqual(len(run_2_keys), RUN_2_COUNT)
         self.assertEqual(len(run_3_keys), RUN_3_COUNT)
-        self.assertEqual(len(run_1_keys | run_2_keys), 5_000)
+        self.assertEqual(len(late_keys), LATE_COUNT)
+        initial_keys = run_1_keys | run_2_keys | run_3_keys
+        self.assertEqual(len(initial_keys), INITIAL_COUNT)
         self.assertFalse(run_1_keys & run_2_keys)
-        self.assertEqual(len(run_3_keys - run_1_keys - run_2_keys), 10)
-        self.assertEqual(len(run_3_keys & run_1_keys), 5)
-        self.assertFalse(run_3_keys & run_2_keys)
+        self.assertFalse(run_1_keys & run_3_keys)
+        self.assertFalse(run_2_keys & run_3_keys)
+        self.assertEqual(len(late_keys - initial_keys), LATE_INSERTS)
+        self.assertEqual(len(late_keys & run_1_keys), LATE_CORRECTIONS)
+        self.assertFalse(late_keys & run_2_keys)
+        self.assertFalse(late_keys & run_3_keys)
 
     def test_corrections_match_complete_run_1_records(self) -> None:
         originals = {row["order_line_id"]: row for row in self.run_1}
         run_2_keys = {row["order_line_id"] for row in self.run_2}
+        run_3_keys = {row["order_line_id"] for row in self.run_3}
         corrections = [
-            row for row in self.run_3 if row["order_line_id"] in originals
+            row
+            for row in self.late_arriving
+            if row["order_line_id"] in originals
         ]
         self.assertEqual(
             {row["order_line_id"] for row in corrections},
@@ -571,43 +622,47 @@ class SyntheticDataGeneratorTests(unittest.TestCase):
         for correction in corrections:
             original = originals[correction["order_line_id"]]
             self.assertNotIn(correction["order_line_id"], run_2_keys)
-            self.assertEqual(tuple(correction), ORDER_EVOLVED_COLUMNS)
+            self.assertNotIn(correction["order_line_id"], run_3_keys)
+            self.assertEqual(tuple(correction), ORDER_BASE_COLUMNS)
             self.assertGreater(
                 parse_timestamp(correction["updated_at"]),
                 parse_timestamp(original["updated_at"]),
             )
-            self.assertTrue(
+            quantity_changed = (
                 correction["quantity"] != original["quantity"]
-                or correction["unit_price"] != original["unit_price"]
             )
+            price_changed = (
+                correction["unit_price"] != original["unit_price"]
+            )
+            self.assertNotEqual(quantity_changed, price_changed)
             for column in unchanged_columns:
                 self.assertEqual(correction[column], original[column])
-            self.assertEqual(correction["sales_channel"], "")
+            self.assertNotIn("sales_channel", correction)
 
     def test_run_3_upsert_is_idempotent(self) -> None:
         current = {
             row["order_line_id"]: dict(row)
-            for row in (*self.run_1, *self.run_2)
+            for row in (*self.run_1, *self.run_2, *self.run_3)
         }
-        first_result = apply_run(current, self.run_3)
+        first_result = apply_run(current, self.late_arriving)
         first_state = {
             key: tuple(row.get(column, "") for column in ORDER_EVOLVED_COLUMNS)
             for key, row in current.items()
         }
-        second_result = apply_run(current, self.run_3)
+        second_result = apply_run(current, self.late_arriving)
         second_state = {
             key: tuple(row.get(column, "") for column in ORDER_EVOLVED_COLUMNS)
             for key, row in current.items()
         }
-        self.assertEqual(first_result, (10, 5, 0))
-        self.assertEqual(second_result, (0, 0, 15))
+        self.assertEqual(first_result, (LATE_INSERTS, LATE_CORRECTIONS, 0))
+        self.assertEqual(second_result, (0, 0, LATE_COUNT))
         self.assertEqual(len(current), FINAL_DISTINCT)
         self.assertEqual(first_state, second_state)
 
     def test_customer_versions_and_equal_timestamp_tie_break(self) -> None:
         counts = Counter(row["customer_id"] for row in self.customers)
-        self.assertEqual(len(counts), 500)
-        self.assertEqual(sum(count > 1 for count in counts.values()), 10)
+        self.assertEqual(len(counts), CUSTOMER_DISTINCT)
+        self.assertEqual(sum(count > 1 for count in counts.values()), 4)
         for customer_id, count in counts.items():
             if count == 1:
                 continue
@@ -670,7 +725,12 @@ class SyntheticDataGeneratorTests(unittest.TestCase):
             self.assertNotIn(b"\r", content)
             self.assertTrue(content.endswith(b"\n"))
 
-        order_rows = self.run_1 + self.run_2 + self.run_3
+        order_rows = (
+            self.run_1
+            + self.run_2
+            + self.run_3
+            + self.late_arriving
+        )
         for row in order_rows:
             if row["unit_price"]:
                 self.assertRegex(row["unit_price"], DECIMAL_PATTERN)
@@ -697,6 +757,12 @@ class SyntheticDataGeneratorTests(unittest.TestCase):
         run_2_max = date.fromisoformat(
             RUN_METRICS["run_2"]["order_date"]["max"]
         )
+        run_3_min = date.fromisoformat(
+            RUN_METRICS["run_3"]["initial_order_date"]["min"]
+        )
+        run_3_max = date.fromisoformat(
+            RUN_METRICS["run_3"]["initial_order_date"]["max"]
+        )
         self.assertTrue(
             all(
                 run_1_min <= date.fromisoformat(row["order_date"]) <= run_1_max
@@ -709,18 +775,37 @@ class SyntheticDataGeneratorTests(unittest.TestCase):
                 for row in self.run_2
             )
         )
-        first_two_run_keys = {
-            row["order_line_id"] for row in (*self.run_1, *self.run_2)
+        self.assertTrue(
+            all(
+                run_3_min <= date.fromisoformat(row["order_date"]) <= run_3_max
+                for row in self.run_3
+            )
+        )
+        for rows, minimum_date in (
+            (self.run_1, run_1_min),
+            (self.run_2, run_2_min),
+            (self.run_3, run_3_min),
+        ):
+            self.assertEqual(
+                {date.fromisoformat(row["order_date"]) for row in rows},
+                {
+                    minimum_date + timedelta(days=offset)
+                    for offset in range(10)
+                },
+            )
+        initial_keys = {
+            row["order_line_id"]
+            for row in (*self.run_1, *self.run_2, *self.run_3)
         }
         late_inserts = [
             row
-            for row in self.run_3
-            if row["order_line_id"] not in first_two_run_keys
+            for row in self.late_arriving
+            if row["order_line_id"] not in initial_keys
         ]
         latest_run_2_update = max(
             parse_timestamp(row["updated_at"]) for row in self.run_2
         )
-        self.assertEqual(len(late_inserts), RUN_3_INSERTS)
+        self.assertEqual(len(late_inserts), LATE_INSERTS)
         for row in late_inserts:
             self.assertGreater(
                 parse_timestamp(row["updated_at"]), latest_run_2_update
@@ -731,13 +816,37 @@ class SyntheticDataGeneratorTests(unittest.TestCase):
             self.assertLessEqual(
                 date.fromisoformat(row["order_date"]), run_1_max
             )
-            self.assertTrue(
-                row["sales_channel"] == ""
-                or row["sales_channel"] in ALLOWED_SALES_CHANNELS
-            )
+            self.assertNotIn("sales_channel", row)
 
-    def test_quality_scenarios_are_separate_in_run_1_and_run_2(self) -> None:
-        for rows in (self.run_1, self.run_2):
+    def test_quality_scenarios_are_separate_in_each_initial_run(self) -> None:
+        initial_rows = self.run_1 + self.run_2 + self.run_3
+        aggregate_scenarios = quality_keys(initial_rows)
+        self.assertEqual(
+            {
+                scenario: len(keys)
+                for scenario, keys in aggregate_scenarios.items()
+            },
+            {
+                "cancelled": 5,
+                "null_price": 5,
+                "negative_price": 5,
+                "zero_price": 5,
+                "invalid_status": 5,
+                "orphan_customer": 5,
+                "orphan_product": 5,
+            },
+        )
+        aggregate_keys = [
+            key
+            for keys in aggregate_scenarios.values()
+            for key in keys
+        ]
+        self.assertEqual(
+            len(aggregate_keys),
+            len(set(aggregate_keys)),
+        )
+
+        for rows in (self.run_1, self.run_2, self.run_3):
             scenarios = quality_keys(rows)
             self.assertTrue(all(scenarios.values()))
             all_keys = [
@@ -745,9 +854,153 @@ class SyntheticDataGeneratorTests(unittest.TestCase):
             ]
             self.assertEqual(len(all_keys), len(set(all_keys)))
 
+    def test_zero_price_is_retained_and_not_economically_invalid(self) -> None:
+        initial_rows = self.run_1 + self.run_2 + self.run_3
+        zero_price_rows = [
+            row for row in initial_rows if row["unit_price"] == "0.00"
+        ]
+        self.assertTrue(zero_price_rows)
+        self.assertTrue(
+            all(
+                not generator_module._is_economically_invalid_unit_price(
+                    row["unit_price"]
+                )
+                for row in zero_price_rows
+            )
+        )
+        self.assertTrue(
+            generator_module._is_economically_invalid_unit_price("")
+        )
+        self.assertTrue(
+            generator_module._is_economically_invalid_unit_price("-1.00")
+        )
+
+    def test_initial_multi_line_order_ratio_uses_distinct_order_ids(self) -> None:
+        initial_rows = self.run_1 + self.run_2 + self.run_3
+        order_lines_by_order = {
+            order_id: {
+                row["order_line_id"] for row in order_rows
+            }
+            for order_id, order_rows in group_rows_by_order(
+                initial_rows
+            ).items()
+        }
+        multi_line_orders = sum(
+            len(order_line_ids) >= 2
+            for order_line_ids in order_lines_by_order.values()
+        )
+        ratio = Decimal(multi_line_orders) / Decimal(
+            len(order_lines_by_order)
+        )
+        self.assertEqual(len(initial_rows), INITIAL_COUNT)
+        self.assertTrue(
+            any(
+                len(order_line_ids) == 1
+                for order_line_ids in order_lines_by_order.values()
+            )
+        )
+        self.assertGreater(multi_line_orders, 0)
+        self.assertGreaterEqual(ratio, MIN_MULTI_LINE_RATIO)
+
+    def test_order_header_attributes_are_consistent_within_each_run(
+        self,
+    ) -> None:
+        for label, rows, include_sales_channel in (
+            ("run_1", self.run_1, False),
+            ("run_2", self.run_2, False),
+            ("run_3", self.run_3, True),
+        ):
+            with self.subTest(run=label):
+                grouped = group_rows_by_order(rows)
+                self.assertTrue(grouped)
+                for order_id, order_rows in grouped.items():
+                    for column in (
+                        "customer_id",
+                        "order_date",
+                        "order_status",
+                    ):
+                        self.assertEqual(
+                            len({row[column] for row in order_rows}),
+                            1,
+                            f"{label} {order_id} has inconsistent {column}",
+                        )
+                    if include_sales_channel:
+                        self.assertEqual(
+                            len(
+                                {
+                                    row["sales_channel"]
+                                    for row in order_rows
+                                }
+                            ),
+                            1,
+                            (
+                                f"{label} {order_id} has inconsistent "
+                                "sales_channel"
+                            ),
+                        )
+                    else:
+                        self.assertTrue(
+                            all(
+                                "sales_channel" not in row
+                                for row in order_rows
+                            )
+                        )
+
+        all_initial_rows = self.run_1 + self.run_2 + self.run_3
+        all_grouped = group_rows_by_order(all_initial_rows)
+        per_run_order_count = sum(
+            len(group_rows_by_order(rows))
+            for rows in (self.run_1, self.run_2, self.run_3)
+        )
+        self.assertEqual(len(all_grouped), per_run_order_count)
+        for order_id, order_rows in all_grouped.items():
+            for column in (
+                "customer_id",
+                "order_date",
+                "order_status",
+                "sales_channel",
+            ):
+                self.assertEqual(
+                    len({row.get(column, "") for row in order_rows}),
+                    1,
+                    f"{order_id} has inconsistent {column} across runs",
+                )
+
+    def test_sales_channel_schema_evolves_only_on_ordinary_run_3(self) -> None:
+        self.assertTrue(
+            all("sales_channel" not in row for row in self.run_1)
+        )
+        self.assertTrue(
+            all("sales_channel" not in row for row in self.run_2)
+        )
+        self.assertTrue(
+            all(
+                "sales_channel" not in row
+                for row in self.late_arriving
+            )
+        )
+        self.assertTrue(
+            all("sales_channel" in row for row in self.run_3)
+        )
+        self.assertTrue(
+            all(
+                not row["sales_channel"]
+                or row["sales_channel"] in ALLOWED_SALES_CHANNELS
+                for row in self.run_3
+            )
+        )
+
     def test_master_data_counts_and_synthetic_values(self) -> None:
-        self.assertEqual(len(self.customers), 510)
-        self.assertEqual(len(self.products), 100)
+        self.assertEqual(len(self.customers), CUSTOMER_DISTINCT + 4)
+        self.assertEqual(
+            len({row["customer_id"] for row in self.customers}),
+            CUSTOMER_DISTINCT,
+        )
+        self.assertEqual(len(self.products), PRODUCT_DISTINCT)
+        self.assertEqual(
+            len({row["product_id"] for row in self.products}),
+            PRODUCT_DISTINCT,
+        )
         self.assertTrue(
             all(
                 row["email"].endswith("@example.test")
@@ -1213,7 +1466,10 @@ class SyntheticDataGeneratorTests(unittest.TestCase):
                 recovery_path.name.startswith(".synthetic-data-")
             )
             self.assertTrue(
-                (recovery_path / "backup/run_3/orders.csv").is_file()
+                (
+                    recovery_path
+                    / "backup/run_3/late_arriving/orders.csv"
+                ).is_file()
             )
             self.assertTrue(
                 (recovery_path / "staged/run_1/products.csv").is_file()
@@ -1295,6 +1551,7 @@ class SyntheticDataGeneratorTests(unittest.TestCase):
         run_1_path = Path("run_1/orders.csv")
         run_2_path = Path("run_2/orders.csv")
         run_3_path = Path("run_3/orders.csv")
+        late_path = Path("run_3/late_arriving/orders.csv")
 
         generated = generator_module._build_generated_files(12)
         generated[run_1_path][20]["order_date"] = "2025-01-11"
@@ -1307,14 +1564,19 @@ class SyntheticDataGeneratorTests(unittest.TestCase):
             generator_module._validate_generated_data(generated)
 
         generated = generator_module._build_generated_files(12)
-        generated[run_3_path][0][
+        generated[run_3_path][20]["order_date"] = "2025-01-20"
+        with self.assertRaisesRegex(GenerationError, "run range"):
+            generator_module._validate_generated_data(generated)
+
+        generated = generator_module._build_generated_files(12)
+        generated[late_path][0][
             "updated_at"
         ] = "2025-01-20T00:00:00.000000Z"
         with self.assertRaisesRegex(GenerationError, "later than Run 2"):
             generator_module._validate_generated_data(generated)
 
         generated = generator_module._build_generated_files(12)
-        generated[run_3_path][-1]["order_id"] = "ORD_CHANGED"
+        generated[late_path][-1]["order_id"] = "ORD_CHANGED"
         with self.assertRaisesRegex(
             GenerationError, "unexpectedly changes order_id"
         ):

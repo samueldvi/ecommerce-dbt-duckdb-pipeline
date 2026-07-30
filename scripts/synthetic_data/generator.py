@@ -21,13 +21,18 @@ except ImportError:  # pragma: no cover - guarded for non-POSIX environments
     fcntl = None  # type: ignore[assignment]
 
 DEFAULT_SEED = 20250730
-CUSTOMER_COUNT = 500
-CUSTOMER_VERSION_COUNT = 10
-PRODUCT_COUNT = 100
+CUSTOMER_COUNT = 200
+# The approved contract permits three or four versioned customers. Four keeps
+# the scenario deterministic while exercising the upper accepted boundary.
+CUSTOMER_VERSION_COUNT = 4
+PRODUCT_COUNT = 80
 RUN_1_ORDER_COUNT = 3_000
-RUN_2_ORDER_COUNT = 2_000
+RUN_2_ORDER_COUNT = 1_000
+RUN_3_ORDER_COUNT = 1_000
 RUN_3_LATE_INSERT_COUNT = 10
 RUN_3_CORRECTION_COUNT = 5
+MIN_MULTI_LINE_ORDER_RATIO = Decimal("0.15")
+EXPECTED_QUALITY_SCENARIO_OCCURRENCES = 5
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_OUTPUT_DIR = REPOSITORY_ROOT / "data" / "raw"
@@ -57,8 +62,9 @@ MANAGED_FILE_SCHEMAS: Mapping[Path, tuple[str, ...]] = {
     Path("run_1/customers.csv"): CUSTOMER_COLUMNS,
     Path("run_1/products.csv"): PRODUCT_COLUMNS,
     Path("run_1/orders.csv"): ORDER_BASE_COLUMNS,
-    Path("run_2/orders.csv"): ORDER_EVOLVED_COLUMNS,
+    Path("run_2/orders.csv"): ORDER_BASE_COLUMNS,
     Path("run_3/orders.csv"): ORDER_EVOLVED_COLUMNS,
+    Path("run_3/late_arriving/orders.csv"): ORDER_BASE_COLUMNS,
 }
 
 ALLOWED_ORDER_STATUSES = frozenset({"completed", "cancelled"})
@@ -70,8 +76,10 @@ NULL_VALUE = ""
 
 RUN_1_START_DATE = date(2025, 1, 1)
 RUN_2_START_DATE = date(2025, 1, 11)
-RUN_3_ARRIVAL_TIME = datetime(2025, 1, 22, 12, 0, tzinfo=timezone.utc)
+RUN_3_START_DATE = date(2025, 1, 21)
+LATE_ARRIVAL_TIME = datetime(2025, 1, 20, 18, 0, tzinfo=timezone.utc)
 CORRECTION_LINE_NUMBERS = (100, 500, 1_000, 2_000, 3_000)
+_ORDER_LINE_COUNT_PATTERN = (1, 1, 1, 1, 2)
 
 _FIRST_NAMES = ("Alex", "Casey", "Jordan", "Morgan", "Riley", "Taylor")
 _LAST_NAMES = ("Alpha", "Beta", "Delta", "Gamma", "Kappa", "Sigma")
@@ -363,27 +371,43 @@ def _build_generated_files(seed: int) -> GeneratedFiles:
     rng = random.Random(seed)
     customers = _generate_customers(rng)
     products = _generate_products(rng)
+    run_1_order_count = _order_count_for_line_count(RUN_1_ORDER_COUNT)
+    run_2_order_count = _order_count_for_line_count(RUN_2_ORDER_COUNT)
     run_1_orders = _generate_order_run(
         rng,
         first_line_number=1,
+        first_order_number=1,
         count=RUN_1_ORDER_COUNT,
         start_date=RUN_1_START_DATE,
         include_sales_channel=False,
+        quality_scenario_occurrences=3,
     )
     run_2_orders = _generate_order_run(
         rng,
         first_line_number=RUN_1_ORDER_COUNT + 1,
+        first_order_number=run_1_order_count + 1,
         count=RUN_2_ORDER_COUNT,
         start_date=RUN_2_START_DATE,
-        include_sales_channel=True,
+        include_sales_channel=False,
+        quality_scenario_occurrences=1,
     )
-    run_3_orders = _generate_run_3(rng, run_1_orders)
+    run_3_orders = _generate_order_run(
+        rng,
+        first_line_number=RUN_1_ORDER_COUNT + RUN_2_ORDER_COUNT + 1,
+        first_order_number=run_1_order_count + run_2_order_count + 1,
+        count=RUN_3_ORDER_COUNT,
+        start_date=RUN_3_START_DATE,
+        include_sales_channel=True,
+        quality_scenario_occurrences=1,
+    )
+    late_arriving_orders = _generate_late_arriving(rng, run_1_orders)
     return {
         Path("run_1/customers.csv"): customers,
         Path("run_1/products.csv"): products,
         Path("run_1/orders.csv"): run_1_orders,
         Path("run_2/orders.csv"): run_2_orders,
         Path("run_3/orders.csv"): run_3_orders,
+        Path("run_3/late_arriving/orders.csv"): late_arriving_orders,
     }
 
 
@@ -437,55 +461,152 @@ def _generate_order_run(
     rng: random.Random,
     *,
     first_line_number: int,
+    first_order_number: int,
     count: int,
     start_date: date,
     include_sales_channel: bool,
+    quality_scenario_occurrences: int,
 ) -> list[CsvRow]:
+    line_counts = _order_line_counts(count)
+    quality_scenarios = _quality_scenarios_by_order(
+        line_counts,
+        first_line_number=first_line_number,
+        occurrences=quality_scenario_occurrences,
+    )
     rows: list[CsvRow] = []
-    for offset in range(count):
-        line_number = first_line_number + offset
-        order_date = start_date + timedelta(days=offset % 10)
-        updated_at = datetime(
-            order_date.year,
-            order_date.month,
-            order_date.day,
-            12,
-            tzinfo=timezone.utc,
-        ) + timedelta(microseconds=line_number)
-        row: CsvRow = {
-            "order_line_id": _order_line_id(line_number),
-            "order_id": f"ORD_{((line_number - 1) // 2) + 1:07d}",
-            "customer_id": _customer_id(rng.randint(1, CUSTOMER_COUNT)),
-            "product_id": _product_id(rng.randint(1, PRODUCT_COUNT)),
-            "quantity": str(rng.randint(1, 5)),
-            "unit_price": _random_price(rng),
-            "order_status": "completed",
-            "order_date": order_date.isoformat(),
-            "updated_at": _format_timestamp(updated_at),
-        }
-        if include_sales_channel:
-            channel = rng.choice((None, *sorted(ALLOWED_SALES_CHANNELS)))
-            row["sales_channel"] = NULL_VALUE if channel is None else channel
-        _apply_quality_scenario(row, offset)
-        rows.append(row)
+    next_line_number = first_line_number
+    for order_offset, line_count in enumerate(line_counts):
+        scenario = quality_scenarios.get(order_offset)
+        header = _generate_order_header(
+            rng,
+            order_number=first_order_number + order_offset,
+            order_offset=order_offset,
+            start_date=start_date,
+            include_sales_channel=include_sales_channel,
+        )
+        _apply_order_header_quality_scenario(header, scenario)
+
+        for line_offset in range(line_count):
+            line_number = next_line_number + line_offset
+            row = _generate_order_line(
+                rng,
+                header=header,
+                line_number=line_number,
+                include_sales_channel=include_sales_channel,
+            )
+            if line_offset == 0:
+                _apply_order_line_quality_scenario(row, scenario)
+            rows.append(row)
+        next_line_number += line_count
     return rows
 
 
-def _generate_run_3(
+def _order_line_counts(line_count: int) -> tuple[int, ...]:
+    cycle_line_count = sum(_ORDER_LINE_COUNT_PATTERN)
+    full_cycles, remaining_lines = divmod(line_count, cycle_line_count)
+    return (
+        _ORDER_LINE_COUNT_PATTERN * full_cycles
+        + (1,) * remaining_lines
+    )
+
+
+def _order_count_for_line_count(line_count: int) -> int:
+    return len(_order_line_counts(line_count))
+
+
+def _quality_scenarios_by_order(
+    line_counts: Sequence[int],
+    *,
+    first_line_number: int,
+    occurrences: int,
+) -> dict[int, int]:
+    eligible_orders: list[int] = []
+    next_line_number = first_line_number
+    for order_offset, line_count in enumerate(line_counts):
+        if (
+            line_count == 1
+            and next_line_number not in CORRECTION_LINE_NUMBERS
+        ):
+            eligible_orders.append(order_offset)
+        next_line_number += line_count
+
+    required_orders = occurrences * 7
+    if len(eligible_orders) < required_orders:
+        raise GenerationError(
+            "Not enough single-line orders for isolated quality scenarios."
+        )
+    return {
+        order_offset: assignment % 7
+        for assignment, order_offset in enumerate(
+            eligible_orders[:required_orders]
+        )
+    }
+
+
+def _generate_order_header(
+    rng: random.Random,
+    *,
+    order_number: int,
+    order_offset: int,
+    start_date: date,
+    include_sales_channel: bool,
+) -> CsvRow:
+    order_date = start_date + timedelta(days=order_offset % 10)
+    header: CsvRow = {
+        "order_id": f"ORD_{order_number:07d}",
+        "customer_id": _customer_id(rng.randint(1, CUSTOMER_COUNT)),
+        "order_status": "completed",
+        "order_date": order_date.isoformat(),
+    }
+    if include_sales_channel:
+        channel = rng.choice((None, *sorted(ALLOWED_SALES_CHANNELS)))
+        header["sales_channel"] = (
+            NULL_VALUE if channel is None else channel
+        )
+    return header
+
+
+def _generate_order_line(
+    rng: random.Random,
+    *,
+    header: CsvRow,
+    line_number: int,
+    include_sales_channel: bool,
+) -> CsvRow:
+    order_date = date.fromisoformat(header["order_date"])
+    updated_at = datetime(
+        order_date.year,
+        order_date.month,
+        order_date.day,
+        12,
+        tzinfo=timezone.utc,
+    ) + timedelta(microseconds=line_number)
+    row: CsvRow = {
+        "order_line_id": _order_line_id(line_number),
+        "order_id": header["order_id"],
+        "customer_id": header["customer_id"],
+        "product_id": _product_id(rng.randint(1, PRODUCT_COUNT)),
+        "quantity": str(rng.randint(1, 5)),
+        "unit_price": _random_price(rng),
+        "order_status": header["order_status"],
+        "order_date": header["order_date"],
+        "updated_at": _format_timestamp(updated_at),
+    }
+    if include_sales_channel:
+        row["sales_channel"] = header["sales_channel"]
+    return row
+
+
+def _generate_late_arriving(
     rng: random.Random, run_1_orders: Sequence[CsvRow]
 ) -> list[CsvRow]:
     late_inserts: list[CsvRow] = []
-    first_late_line_number = RUN_1_ORDER_COUNT + RUN_2_ORDER_COUNT + 1
-    channels: tuple[str | None, ...] = (
-        None,
-        "web",
-        "mobile",
-        "marketplace",
+    first_late_line_number = (
+        RUN_1_ORDER_COUNT + RUN_2_ORDER_COUNT + RUN_3_ORDER_COUNT + 1
     )
     for offset in range(RUN_3_LATE_INSERT_COUNT):
         line_number = first_late_line_number + offset
         historical_date = RUN_1_START_DATE + timedelta(days=offset)
-        channel = channels[offset % len(channels)]
         late_inserts.append(
             {
                 "order_line_id": _order_line_id(line_number),
@@ -497,9 +618,8 @@ def _generate_run_3(
                 "order_status": "completed",
                 "order_date": historical_date.isoformat(),
                 "updated_at": _format_timestamp(
-                    RUN_3_ARRIVAL_TIME + timedelta(microseconds=offset)
+                    LATE_ARRIVAL_TIME + timedelta(microseconds=offset)
                 ),
-                "sales_channel": NULL_VALUE if channel is None else channel,
             }
         )
 
@@ -516,28 +636,35 @@ def _generate_run_3(
                 original_price + Decimal("1.00")
             )
         correction["updated_at"] = _format_timestamp(
-            RUN_3_ARRIVAL_TIME
+            LATE_ARRIVAL_TIME
             + timedelta(seconds=1, microseconds=offset)
         )
-        correction["sales_channel"] = NULL_VALUE
         corrections.append(correction)
     return late_inserts + corrections
 
 
-def _apply_quality_scenario(row: CsvRow, offset: int) -> None:
-    scenario = offset % 1_000
+def _apply_order_header_quality_scenario(
+    header: CsvRow, scenario: int | None
+) -> None:
     if scenario == 0:
-        row["order_status"] = "cancelled"
-    elif scenario == 1:
+        header["order_status"] = "cancelled"
+    elif scenario == 3:
+        header["order_status"] = INVALID_ORDER_STATUS
+    elif scenario == 4:
+        header["customer_id"] = ORPHAN_CUSTOMER_ID
+
+
+def _apply_order_line_quality_scenario(
+    row: CsvRow, scenario: int | None
+) -> None:
+    if scenario == 1:
         row["unit_price"] = NULL_VALUE
     elif scenario == 2:
         row["unit_price"] = "-1.00"
-    elif scenario == 3:
-        row["order_status"] = INVALID_ORDER_STATUS
-    elif scenario == 4:
-        row["customer_id"] = ORPHAN_CUSTOMER_ID
     elif scenario == 5:
         row["product_id"] = ORPHAN_PRODUCT_ID
+    elif scenario == 6:
+        row["unit_price"] = "0.00"
 
 
 def _random_price(rng: random.Random) -> str:
@@ -581,33 +708,46 @@ def _validate_generated_data(generated: GeneratedFiles) -> None:
     run_1 = generated[Path("run_1/orders.csv")]
     run_2 = generated[Path("run_2/orders.csv")]
     run_3 = generated[Path("run_3/orders.csv")]
+    late_arriving = generated[Path("run_3/late_arriving/orders.csv")]
 
     _validate_customers(customers)
     _validate_products(products)
     _require_row_count_and_unique_keys(run_1, RUN_1_ORDER_COUNT, "Run 1")
     _require_row_count_and_unique_keys(run_2, RUN_2_ORDER_COUNT, "Run 2")
+    _require_row_count_and_unique_keys(run_3, RUN_3_ORDER_COUNT, "Run 3")
     _require_row_count_and_unique_keys(
-        run_3,
+        late_arriving,
         RUN_3_LATE_INSERT_COUNT + RUN_3_CORRECTION_COUNT,
-        "Run 3",
+        "Late-arriving batch",
     )
 
     run_1_keys = _keys(run_1)
     run_2_keys = _keys(run_2)
     run_3_keys = _keys(run_3)
-    if run_1_keys & run_2_keys:
-        raise GenerationError("Run 1 and Run 2 keys must be disjoint.")
-    existing_run_3_keys = run_3_keys & (run_1_keys | run_2_keys)
-    new_run_3_keys = run_3_keys - (run_1_keys | run_2_keys)
-    if len(new_run_3_keys) != RUN_3_LATE_INSERT_COUNT:
-        raise GenerationError("Run 3 must contain exactly 10 new keys.")
+    initial_keys = run_1_keys | run_2_keys | run_3_keys
     if (
-        len(existing_run_3_keys) != RUN_3_CORRECTION_COUNT
-        or not existing_run_3_keys <= run_1_keys
-        or existing_run_3_keys & run_2_keys
+        run_1_keys & run_2_keys
+        or run_1_keys & run_3_keys
+        or run_2_keys & run_3_keys
+        or len(initial_keys)
+        != RUN_1_ORDER_COUNT + RUN_2_ORDER_COUNT + RUN_3_ORDER_COUNT
     ):
         raise GenerationError(
-            "Run 3 corrections must be five distinct Run 1 keys."
+            "Initial order_line_id values must be unique across all runs."
+        )
+    late_arriving_keys = _keys(late_arriving)
+    existing_late_keys = late_arriving_keys & initial_keys
+    new_late_keys = late_arriving_keys - initial_keys
+    if len(new_late_keys) != RUN_3_LATE_INSERT_COUNT:
+        raise GenerationError(
+            "The late-arriving batch must contain exactly 10 new keys."
+        )
+    if (
+        len(existing_late_keys) != RUN_3_CORRECTION_COUNT
+        or not existing_late_keys <= run_1_keys
+    ):
+        raise GenerationError(
+            "Late-arriving corrections must be five distinct Run 1 keys."
         )
 
     _validate_orders(
@@ -618,28 +758,52 @@ def _validate_generated_data(generated: GeneratedFiles) -> None:
     )
     _validate_orders(
         run_2,
-        include_sales_channel=True,
+        include_sales_channel=False,
         minimum_order_date=RUN_2_START_DATE,
         maximum_order_date=RUN_2_START_DATE + timedelta(days=9),
     )
     _validate_orders(
         run_3,
         include_sales_channel=True,
+        minimum_order_date=RUN_3_START_DATE,
+        maximum_order_date=RUN_3_START_DATE + timedelta(days=9),
+    )
+    _validate_orders(
+        late_arriving,
+        include_sales_channel=False,
         minimum_order_date=RUN_1_START_DATE,
         maximum_order_date=RUN_1_START_DATE + timedelta(days=9),
     )
-    _validate_order_references(customers, products, run_1 + run_2 + run_3)
-    _validate_corrections(run_1, run_3, existing_run_3_keys)
+    initial_orders = run_1 + run_2 + run_3
+    _validate_order_references(
+        customers,
+        products,
+        initial_orders + late_arriving,
+    )
+    _validate_corrections(run_1, late_arriving, existing_late_keys)
     latest_run_2_update = max(
         _parse_timestamp(row["updated_at"]) for row in run_2
     )
     _validate_late_inserts(
-        run_3,
-        new_run_3_keys,
+        late_arriving,
+        new_late_keys,
         latest_run_2_update=latest_run_2_update,
     )
-    _validate_logical_upsert(run_1, run_2, run_3)
-    _validate_quality_scenarios(run_1 + run_2 + run_3)
+    _validate_order_header_consistency(
+        run_1, include_sales_channel=False
+    )
+    _validate_order_header_consistency(
+        run_2, include_sales_channel=False
+    )
+    _validate_order_header_consistency(
+        run_3, include_sales_channel=True
+    )
+    _validate_order_header_consistency(
+        initial_orders, include_sales_channel=True
+    )
+    _validate_multi_line_orders(initial_orders)
+    _validate_logical_upsert(run_1, run_2, run_3, late_arriving)
+    _validate_quality_scenarios(initial_orders + late_arriving)
 
 
 def _validate_customers(customers: Sequence[CsvRow]) -> None:
@@ -838,8 +1002,6 @@ def _validate_corrections(
             and correction["unit_price"] == original["unit_price"]
         ):
             raise GenerationError("A correction does not change quantity or price.")
-        if correction["sales_channel"] != NULL_VALUE:
-            raise GenerationError("A Run 1 correction must have null sales_channel.")
         unchanged_columns = (
             "order_line_id",
             "order_id",
@@ -879,12 +1041,13 @@ def _validate_logical_upsert(
     run_1: Sequence[CsvRow],
     run_2: Sequence[CsvRow],
     run_3: Sequence[CsvRow],
+    late_arriving: Sequence[CsvRow],
 ) -> None:
     current = {
-        row["order_line_id"]: row for row in (*run_1, *run_2)
+        row["order_line_id"]: row for row in (*run_1, *run_2, *run_3)
     }
     updates = 0
-    for candidate in run_3:
+    for candidate in late_arriving:
         key = candidate["order_line_id"]
         existing = current.get(key)
         if existing is None:
@@ -908,32 +1071,109 @@ def _order_precedence(row: CsvRow) -> tuple[str, tuple[str, ...]]:
     return row["updated_at"], payload
 
 
-def _validate_quality_scenarios(rows: Sequence[CsvRow]) -> None:
-    checks = {
-        "cancelled order": any(
-            row["order_status"] == "cancelled" for row in rows
-        ),
-        "null unit_price": any(row["unit_price"] == NULL_VALUE for row in rows),
-        "non-positive unit_price": any(
-            row["unit_price"]
-            and Decimal(row["unit_price"]) <= Decimal("0.00")
-            for row in rows
-        ),
-        "out-of-domain status": any(
-            row["order_status"] not in ALLOWED_ORDER_STATUSES for row in rows
-        ),
-        "orphan customer": any(
-            row["customer_id"] == ORPHAN_CUSTOMER_ID for row in rows
-        ),
-        "orphan product": any(
-            row["product_id"] == ORPHAN_PRODUCT_ID for row in rows
-        ),
-    }
-    missing = [name for name, present in checks.items() if not present]
-    if missing:
-        raise GenerationError(
-            f"Missing required quality scenarios: {', '.join(missing)}"
+def _validate_multi_line_orders(rows: Sequence[CsvRow]) -> None:
+    order_lines_by_order: dict[str, set[str]] = {}
+    for row in rows:
+        order_lines_by_order.setdefault(row["order_id"], set()).add(
+            row["order_line_id"]
         )
+    if not order_lines_by_order:
+        raise GenerationError("Initial orders must not be empty.")
+    multi_line_orders = sum(
+        len(order_line_ids) >= 2
+        for order_line_ids in order_lines_by_order.values()
+    )
+    if multi_line_orders == len(order_lines_by_order):
+        raise GenerationError(
+            "Initial orders must include single-line and multi-line orders."
+        )
+    ratio = Decimal(multi_line_orders) / Decimal(len(order_lines_by_order))
+    if ratio < MIN_MULTI_LINE_ORDER_RATIO:
+        raise GenerationError(
+            "At least 15% of distinct order_id values must be multi-line."
+        )
+
+
+def _validate_order_header_consistency(
+    rows: Sequence[CsvRow], *, include_sales_channel: bool
+) -> None:
+    header_columns = ["customer_id", "order_date", "order_status"]
+    if include_sales_channel:
+        header_columns.append("sales_channel")
+    grouped: dict[str, list[CsvRow]] = {}
+    for row in rows:
+        grouped.setdefault(row["order_id"], []).append(row)
+    for order_id, order_rows in grouped.items():
+        for column in header_columns:
+            if (
+                len(
+                    {
+                        row.get(column, NULL_VALUE)
+                        for row in order_rows
+                    }
+                )
+                != 1
+            ):
+                raise GenerationError(
+                    f"Inconsistent {column} for order_id {order_id}."
+                )
+
+
+def _is_economically_invalid_unit_price(value: str) -> bool:
+    return value == NULL_VALUE or Decimal(value) < Decimal("0.00")
+
+
+def _validate_quality_scenarios(rows: Sequence[CsvRow]) -> None:
+    scenario_keys = {
+        "cancelled order": {
+            row["order_line_id"]
+            for row in rows
+            if row["order_status"] == "cancelled"
+        },
+        "null unit_price": {
+            row["order_line_id"]
+            for row in rows
+            if row["unit_price"] == NULL_VALUE
+        },
+        "negative unit_price": {
+            row["order_line_id"]
+            for row in rows
+            if row["unit_price"]
+            and _is_economically_invalid_unit_price(row["unit_price"])
+        },
+        "zero unit_price": {
+            row["order_line_id"]
+            for row in rows
+            if row["unit_price"] == "0.00"
+        },
+        "out-of-domain status": {
+            row["order_line_id"]
+            for row in rows
+            if row["order_status"] not in ALLOWED_ORDER_STATUSES
+        },
+        "orphan customer": {
+            row["order_line_id"]
+            for row in rows
+            if row["customer_id"] == ORPHAN_CUSTOMER_ID
+        },
+        "orphan product": {
+            row["order_line_id"]
+            for row in rows
+            if row["product_id"] == ORPHAN_PRODUCT_ID
+        },
+    }
+    unexpected_counts = {
+        name: len(keys)
+        for name, keys in scenario_keys.items()
+        if len(keys) != EXPECTED_QUALITY_SCENARIO_OCCURRENCES
+    }
+    if unexpected_counts:
+        raise GenerationError(
+            f"Unexpected quality scenario counts: {unexpected_counts}"
+        )
+    all_keys = [key for keys in scenario_keys.values() for key in keys]
+    if len(all_keys) != len(set(all_keys)):
+        raise GenerationError("Quality scenarios must not overlap.")
 
 
 def _write_generated_files(
