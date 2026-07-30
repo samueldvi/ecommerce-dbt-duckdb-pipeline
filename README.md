@@ -23,3 +23,35 @@ Copiare il profilo di esempio nella root del progetto e verificare la configuraz
 cp profiles.yml.example profiles.yml
 dbt debug --profiles-dir .
 ```
+
+## Generazione dei dati sintetici
+
+Il generatore crea CSV deterministici conformi ai
+[contratti dati](docs/data_contracts.md), usando esclusivamente dati sintetici.
+Il seed predefinito è `20250730` e la destinazione predefinita è `data/raw/`:
+
+```bash
+python scripts/generate_synthetic_data.py
+```
+
+Sono prodotti `customers.csv`, `products.csv` e `orders.csv` sotto `run_1/`,
+oltre a `orders.csv` sotto `run_2/`, `run_3/` e `run_3/late_arriving/`.
+Quest'ultimo file contiene il batch late-arriving, separato dal Run 3
+ordinario. I valori nulli sono serializzati come campi CSV vuoti. Le opzioni
+principali sono:
+
+```bash
+python scripts/generate_synthetic_data.py \
+  --seed 20250730 \
+  --output-dir data/raw \
+  --force
+```
+
+`--force` sostituisce soltanto i sei CSV gestiti dal generatore. A parità di
+seed, schema, ordine e contenuto dei file sono byte-identici.
+
+Per eseguire i test automatici:
+
+```bash
+python -m unittest discover -s tests -v
+```
