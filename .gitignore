@@ -1,0 +1,30 @@
+# Ambiente virtuale
+.venv/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# dbt
+target/
+dbt_packages/
+logs/
+profiles.yml
+
+# DuckDB
+*.duckdb
+*.duckdb.wal
+
+# Variabili e configurazioni locali
+.env
+.env.*
+!.env.example
+!.profiles.yml.example
+
+# Editor e sistema operativo
+.vscode/
+.DS_Store
