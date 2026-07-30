@@ -2,63 +2,75 @@ version: 1
 
 order_lines:
   unique_key: order_line_id
+
+  initial_dataset:
+    input_rows:
+      exact: 5000
+    distinct_keys:
+      exact: 5000
+    order_date:
+      min: "2025-01-01"
+      max: "2025-01-30"
+
   runs:
     run_1:
-      input_rows:
-        exact: 3000
-      inserts:
-        exact: 3000
-      corrections:
-        exact: 0
-      expected_updates:
-        exact: 0
-      cumulative_distinct_keys:
-        exact: 3000
+      load_mode: initial_new_keys
       order_date:
         min: "2025-01-01"
         max: "2025-01-10"
+      schema:
+        sales_channel_present: false
 
     run_2:
-      input_rows:
-        exact: 2000
-      inserts:
-        exact: 2000
-      corrections:
-        exact: 0
-      expected_updates:
-        exact: 0
-      cumulative_distinct_keys:
-        exact: 5000
+      load_mode: initial_new_keys
       order_date:
         min: "2025-01-11"
         max: "2025-01-20"
+      schema:
+        sales_channel_present: false
+
+    run_3:
+      load_mode: initial_new_keys_and_late_arriving_upsert
+      initial_order_date:
+        min: "2025-01-21"
+        max: "2025-01-30"
       schema_evolution:
         added_column: sales_channel
         nullable: true
+        applies_to: initial_window_rows
         prior_rows_value: null
-
-    run_3:
-      input_rows:
-        exact: 15
-      file_distinct_keys:
-        exact: 15
-      new_keys:
-        exact: 10
-      existing_keys:
-        exact: 5
-        origin_run: run_1
-      inserts:
-        exact: 10
-      corrections:
-        exact: 5
-      corrections_target_run: run_1
-      expected_updates:
-        exact: 5
-      cumulative_distinct_keys:
-        exact: 5010
-      late_insert_order_date:
-        min: "2025-01-01"
-        max: "2025-01-10"
+      late_arriving:
+        received_after: run_2
+        additional_to_initial_dataset: true
+        input_rows:
+          exact: 15
+        file_distinct_keys:
+          exact: 15
+        schema:
+          sales_channel_present: false
+          aligned_value: null
+        new_keys:
+          exact: 10
+        existing_keys:
+          exact: 5
+          origin_run: run_1
+        inserts:
+          exact: 10
+        corrections:
+          exact: 5
+          record_complete: true
+          updated_at_after_original: true
+          preserved_business_fields:
+            - order_id
+            - customer_id
+            - product_id
+            - order_status
+            - order_date
+        expected_updates:
+          exact: 5
+        late_insert_order_date:
+          min: "2025-01-01"
+          max: "2025-01-10"
 
   final:
     distinct_keys:
@@ -73,8 +85,11 @@ master_data:
     appears_in:
       - run_1
     load_mode: full_snapshot_once
-    input_rows:
-      min: 1
+    distinct_keys:
+      exact: 200
+    keys_with_multiple_versions:
+      min: 3
+      max: 4
     current_version_order:
       - updated_at_desc
       - canonical_payload_desc
@@ -82,8 +97,8 @@ master_data:
     appears_in:
       - run_1
     load_mode: full_snapshot_once
-    input_rows:
-      min: 1
+    distinct_keys:
+      exact: 80
     current_version_order:
       - canonical_payload_desc
 
@@ -92,10 +107,17 @@ invariants:
     columns:
       - order_line_id
     final_unique: true
+  initial_order_keys_disjoint_across_runs: true
   idempotent_reprocessing: true
   corrections_change_at_least_one:
     - quantity
     - unit_price
+  multi_line_orders:
+    population: initial_dataset
+    numerator: "count(distinct order_id) having count(distinct order_line_id) >= 2"
+    denominator: "count(distinct order_id)"
+    ratio:
+      min: 0.15
   cancelled_orders:
     required_occurrences:
       min: 1
@@ -108,7 +130,7 @@ invariants:
     economically_valid: false
     included_in_revenue: false
   invalid_unit_price:
-    condition: "unit_price is null or unit_price <= 0"
+    condition: "unit_price is null or unit_price < 0"
     required_occurrences:
       min: 1
     retained_in_fact: true
