@@ -1,5 +1,7 @@
 # E-commerce dbt DuckDB Pipeline
 
+[![CI](https://github.com/samueldvi/ecommerce-dbt-duckdb-pipeline/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/samueldvi/ecommerce-dbt-duckdb-pipeline/actions/workflows/ci.yml)
+
 Pipeline analitica incrementale per dati e-commerce, sviluppata con dbt e DuckDB.
 
 Il progetto costruisce un modello dimensionale e simula più caricamenti per gestire dati incrementali, late-arriving data, correzioni di record già acquisiti ed evoluzione dello schema.
