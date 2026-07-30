@@ -55,3 +55,23 @@ Per eseguire i test automatici:
 ```bash
 python -m unittest discover -s tests -v
 ```
+
+## Ingestion raw
+
+Inizializzare lo schema DuckDB e caricare transazionalmente i sei CSV:
+
+```bash
+python scripts/ingest_raw_data.py init
+python scripts/ingest_raw_data.py load-all
+```
+
+Per caricare o riprodurre un singolo batch o file:
+
+```bash
+python scripts/ingest_raw_data.py load-batch run_1
+python scripts/ingest_raw_data.py load-file run_2/orders.csv
+```
+
+Il replay di un file invariato è un no-op. Se un percorso già acquisito
+presenta un checksum differente, l'operazione fallisce senza modifiche
+parziali a dati raw o manifest.
