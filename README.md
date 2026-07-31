@@ -133,6 +133,42 @@ python scripts/ingest_raw_data.py load-batch run_3_late_arriving
 Algoritmo di upsert, idempotenza, correction, schema evolution e backfill sono
 descritti in [Gestione incrementale](docs/GESTIONE_INCREMENTALE.md).
 
+## Demo Streamlit
+
+La demo interroga in sola lettura i mart DuckDB e presenta KPI, quattro analisi,
+stato storico dei batch e metriche trasparenti di data quality. Non ricostruisce
+la logica economica in Python: il fatturato proviene dalla misura `revenue`
+calcolata nella fact dbt.
+
+Da un clone pulito, dopo avere configurato l'ambiente come indicato sopra,
+preparare il database e avviare la demo:
+
+```bash
+cp profiles.yml.example profiles.yml
+python scripts/generate_synthetic_data.py
+python scripts/ingest_raw_data.py load-all
+dbt build --profiles-dir .
+streamlit run streamlit_app.py
+```
+
+L'interfaccia è disponibile normalmente su `http://localhost:8501`. Se il
+database manca, è corrotto o non contiene raw e mart richiesti, la pagina mostra
+le risorse mancanti e gli stessi comandi di preparazione senza esporre uno stack
+trace e senza usare dati fittizi.
+
+Il percorso predefinito è `data/warehouse/ecommerce.duckdb`, risolto rispetto
+alla root del progetto e indipendente dalla directory corrente. Per un database
+locale alternativo si può impostare `ECOMMERCE_DB_PATH`; se dbt pubblica i mart
+in uno schema diverso da `analytics`, usare `ECOMMERCE_DBT_SCHEMA`. Lo schema
+predefinito della demo è `analytics`. La struttura
+essenziale è composta dall'entry point `streamlit_app.py` e dal package
+`dashboard/`, che separa configurazione, query, accesso read-only e
+presentazione.
+
+DuckDB è utilizzato come motore analitico locale, leggero e production-like per
+questa implementazione. Non sostituisce una piattaforma enterprise distribuita
+o multiwriter.
+
 ## Query analitiche
 
 Dopo avere popolato il database ed eseguito `dbt build --profiles-dir .`, le

@@ -4,4 +4,5 @@ ecommerce_analytics:
     dev:
       type: duckdb
       path: data/warehouse/ecommerce.duckdb
+      schema: analytics
       threads: 4
