@@ -5,16 +5,16 @@
 Questi contratti definiscono struttura, semantica e risultati attesi dei dataset
 `customers.csv`, `products.csv` e `orders.csv`. La generazione sintetica è già
 disponibile; i contratti restano il riferimento per la sua verifica e per le
-successive milestone di ingestion e modellazione.
+componenti di ingestion e modellazione.
 
 Le responsabilità sono separate come segue:
 
-- Python genera i CSV sintetici e, nelle milestone di ingestion, li caricherà
+- Python genera i CSV sintetici e li carica
   nel raw layer senza applicare logica dimensionale o scartare anomalie
   funzionali;
-- il raw layer conserverà i valori sorgente e la provenienza del run, rendendo
+- il raw layer conserva i valori sorgente e la provenienza del run, rendendo
   disponibili tutte le versioni ricevute;
-- dbt applicherà tipizzazione, controlli di qualità, deduplicazione,
+- dbt applica tipizzazione, controlli di qualità, deduplicazione,
   trasformazioni e modello dimensionale.
 
 Principi:

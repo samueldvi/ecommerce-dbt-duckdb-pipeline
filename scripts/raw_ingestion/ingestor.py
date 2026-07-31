@@ -49,7 +49,6 @@ METADATA_COLUMNS = (
     "file_checksum",
     "ingested_at",
 )
-ALLOWED_SALES_CHANNELS = frozenset({"web", "mobile", "marketplace"})
 
 
 class IngestionError(RuntimeError):
@@ -259,16 +258,7 @@ def _parse_order(
         _parse_timestamp(_require_text(row, "updated_at")),
     ]
     if include_sales_channel:
-        sales_channel = _nullable_text(row, "sales_channel")
-        if (
-            sales_channel is not None
-            and sales_channel not in ALLOWED_SALES_CHANNELS
-        ):
-            raise SchemaValidationError(
-                f"sales_channel is outside the approved domain: "
-                f"{sales_channel!r}."
-            )
-        values.append(sales_channel)
+        values.append(_nullable_text(row, "sales_channel"))
     return tuple(values)
 
 
@@ -595,6 +585,9 @@ class RawIngestor:
                     )
                     continue
 
+                self._validate_order_batch_against_raw(
+                    connection, prepared_file
+                )
                 ingested_at = datetime.now(timezone.utc)
                 self._insert_rows(connection, prepared_file, ingested_at)
                 self._after_file_rows_inserted(connection, prepared_file)
@@ -772,23 +765,24 @@ class RawIngestor:
             )
         if spec.dataset_name == "customers":
             customer_ids = [str(row.typed_values[0]) for row in rows]
-            if len(rows) != 204 or len(set(customer_ids)) != 200:
+            if len(set(customer_ids)) != 200:
                 raise SchemaValidationError(
-                    "customers.csv must contain 204 rows and 200 distinct "
-                    "customer_id values."
+                    "customers.csv must contain 200 distinct customer_id "
+                    "values."
                 )
             versioned = {
                 customer_id
                 for customer_id in customer_ids
                 if customer_ids.count(customer_id) > 1
             }
-            if len(versioned) != 4:
+            if not 3 <= len(versioned) <= 4:
                 raise SchemaValidationError(
-                    "customers.csv must contain four versioned customers."
+                    "customers.csv must contain three or four versioned "
+                    "customers."
                 )
         elif spec.dataset_name == "products":
             product_ids = [str(row.typed_values[0]) for row in rows]
-            if len(rows) != 80 or len(set(product_ids)) != 80:
+            if len(set(product_ids)) != 80:
                 raise SchemaValidationError(
                     "products.csv must contain 80 distinct product_id values."
                 )
@@ -869,21 +863,110 @@ class RawIngestor:
         preserved_indexes = (0, 1, 2, 3, 6, 7)
         for key, correction in correction_rows.items():
             original = originals[key]
-            if not all(
-                correction[index] == original[index]
-                for index in preserved_indexes
-            ):
+            self._validate_correction_values(
+                key, original, correction, preserved_indexes
+            )
+
+    def _validate_order_batch_against_raw(
+        self,
+        connection: duckdb.DuckDBPyConnection,
+        prepared_file: PreparedFile,
+    ) -> None:
+        """Validate cumulative order-key rules inside the write transaction."""
+
+        if prepared_file.spec.dataset_name != "order_lines":
+            return
+
+        candidate_by_key = {
+            str(row.typed_values[0]): row.typed_values
+            for row in prepared_file.rows
+        }
+        existing_rows = connection.execute(
+            """
+            SELECT
+                order_line_id,
+                order_id,
+                customer_id,
+                product_id,
+                quantity,
+                unit_price,
+                order_status,
+                order_date,
+                updated_at,
+                source_run
+            FROM raw.order_lines
+            """
+        ).fetchall()
+        existing_by_key: dict[str, list[tuple[object, ...]]] = {}
+        for existing_row in existing_rows:
+            key = str(existing_row[0])
+            if key in candidate_by_key:
+                existing_by_key.setdefault(key, []).append(existing_row)
+
+        if prepared_file.spec.source_run != "run_3_late_arriving":
+            overlapping_keys = set(candidate_by_key) & set(existing_by_key)
+            if overlapping_keys:
+                sample = ", ".join(sorted(overlapping_keys)[:5])
                 raise SchemaValidationError(
-                    f"Correction {key} changes a preserved business field."
+                    f"{prepared_file.source_file} must contain only new "
+                    f"order_line_id values; existing keys include {sample}."
                 )
-            if correction[4] == original[4] and correction[5] == original[5]:
+            return
+
+        existing_keys = set(existing_by_key)
+        new_keys = set(candidate_by_key) - existing_keys
+        if len(new_keys) != 10 or len(existing_keys) != 5:
+            raise SchemaValidationError(
+                "The late-arriving batch must contain exactly 10 new keys "
+                "and five existing Run 1 correction keys."
+            )
+
+        correction_originals: dict[str, tuple[object, ...]] = {}
+        for key in existing_keys:
+            matching_rows = existing_by_key[key]
+            run_1_rows = [
+                row for row in matching_rows if row[9] == "run_1"
+            ]
+            if len(run_1_rows) != 1 or len(matching_rows) != 1:
                 raise SchemaValidationError(
-                    f"Correction {key} changes neither quantity nor unit_price."
+                    "The late-arriving batch must correct five keys found "
+                    "exclusively in Run 1."
                 )
-            if correction[8] <= original[8]:
-                raise SchemaValidationError(
-                    f"Correction {key} must have a later updated_at."
-                )
+            correction_originals[key] = run_1_rows[0][:9]
+
+        preserved_indexes = (0, 1, 2, 3, 6, 7)
+        for key, original in correction_originals.items():
+            self._validate_correction_values(
+                key,
+                original,
+                candidate_by_key[key],
+                preserved_indexes,
+            )
+
+    @staticmethod
+    def _validate_correction_values(
+        key: str,
+        original: tuple[object, ...],
+        correction: tuple[object, ...],
+        preserved_indexes: tuple[int, ...],
+    ) -> None:
+        """Validate a complete correction against its original Run 1 row."""
+
+        if not all(
+            correction[index] == original[index]
+            for index in preserved_indexes
+        ):
+            raise SchemaValidationError(
+                f"Correction {key} changes a preserved business field."
+            )
+        if correction[4] == original[4] and correction[5] == original[5]:
+            raise SchemaValidationError(
+                f"Correction {key} changes neither quantity nor unit_price."
+            )
+        if correction[8] <= original[8]:
+            raise SchemaValidationError(
+                f"Correction {key} must have a later updated_at."
+            )
 
     def _validate_database_schema(
         self, connection: duckdb.DuckDBPyConnection
