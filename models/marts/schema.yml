@@ -1,0 +1,76 @@
+version: 2
+
+models:
+  - name: dim_customers
+    description: Dimensione cliente SCD Type 1 con membro tecnico Unknown.
+    columns:
+      - name: customer_sk
+        data_tests:
+          - not_null
+          - unique
+      - name: customer_id
+        data_tests:
+          - not_null
+          - unique
+
+  - name: dim_products
+    description: Dimensione prodotto deterministica con membro tecnico Unknown.
+    columns:
+      - name: product_sk
+        data_tests:
+          - not_null
+          - unique
+      - name: product_id
+        data_tests:
+          - not_null
+          - unique
+
+  - name: dim_date
+    description: Calendario stabile per il periodo degli ordini e membro Unknown.
+    columns:
+      - name: date_sk
+        data_tests:
+          - not_null
+          - unique
+
+  - name: fct_order_lines
+    description: Fact incrementale al grain della versione corrente di order_line_id.
+    columns:
+      - name: order_line_id
+        data_tests:
+          - not_null
+          - unique
+      - name: order_id
+        data_tests:
+          - not_null
+      - name: customer_sk
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_customers')
+                field: customer_sk
+      - name: product_sk
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_products')
+                field: product_sk
+      - name: date_sk
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_date')
+                field: date_sk
+      - name: sales_channel
+        data_tests:
+          - accepted_values:
+              arguments:
+                values:
+                  - web
+                  - mobile
+                  - marketplace
+              config:
+                where: sales_channel is not null

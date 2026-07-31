@@ -77,3 +77,18 @@ python scripts/ingest_raw_data.py load-file run_2/orders.csv
 Il replay di un file invariato è un no-op. Se un percorso già acquisito
 presenta un checksum differente, l'operazione fallisce senza modifiche
 parziali a dati raw o manifest.
+
+## Pipeline incrementale dbt
+
+Caricare in sequenza le tre finestre ordinarie e infine il batch late-arriving,
+eseguendo `dbt build --profiles-dir .` dopo ogni comando:
+
+```bash
+python scripts/ingest_raw_data.py load-batch run_1
+python scripts/ingest_raw_data.py load-batch run_2
+python scripts/ingest_raw_data.py load-batch run_3
+python scripts/ingest_raw_data.py load-batch run_3_late_arriving
+```
+
+Algoritmo di upsert, idempotenza, correction, schema evolution e backfill sono
+descritti in [Gestione incrementale](docs/GESTIONE_INCREMENTALE.md).
