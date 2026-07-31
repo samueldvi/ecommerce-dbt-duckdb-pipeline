@@ -200,6 +200,7 @@ class StreamlitDemoTests(unittest.TestCase):
         )
 
     def test_environment_overrides_path_and_schema_safely(self) -> None:
+        self.assertEqual(resolve_dbt_schema(environ={}), "analytics")
         relative = resolve_database_path(
             project_root=self.root,
             environ={DATABASE_PATH_ENV: "custom/demo.duckdb"},
@@ -214,6 +215,30 @@ class StreamlitDemoTests(unittest.TestCase):
         )
         with self.assertRaises(DashboardConfigurationError):
             resolve_dbt_schema(environ={DBT_SCHEMA_ENV: "main; drop schema raw"})
+
+    def test_default_analytics_schema_loads_and_wrong_schema_is_controlled(
+        self,
+    ) -> None:
+        create_complete_database(self.database_path, schema="analytics")
+        default_config = load_dashboard_config(
+            project_root=self.root,
+            environ={DATABASE_PATH_ENV: str(self.database_path)},
+        )
+        snapshot = load_dashboard_snapshot(default_config)
+
+        self.assertEqual(default_config.dbt_schema, "analytics")
+        self.assertEqual(snapshot.kpis.records()[0]["order_lines"], 2)
+        self.assertEqual(len(snapshot.revenue_by_category_month.rows), 1)
+        self.assertEqual(len(snapshot.top_customers.rows), 1)
+        self.assertEqual(len(snapshot.orders_by_region_week.rows), 1)
+        self.assertEqual(len(snapshot.category_ranking.rows), 1)
+
+        with self.assertRaises(DatabaseIncompleteError) as context:
+            load_dashboard_snapshot(self.config(schema="wrong_schema"))
+        self.assertIn(
+            "wrong_schema.fct_order_lines",
+            context.exception.missing_resources,
+        )
 
     def test_database_fingerprint_changes_with_database_file(self) -> None:
         create_complete_database(self.database_path, with_rows=False)

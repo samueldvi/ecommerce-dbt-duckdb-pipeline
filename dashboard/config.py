@@ -12,7 +12,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATABASE_RELATIVE_PATH = Path("data/warehouse/ecommerce.duckdb")
 DATABASE_PATH_ENV = "ECOMMERCE_DB_PATH"
 DBT_SCHEMA_ENV = "ECOMMERCE_DBT_SCHEMA"
-DEFAULT_DBT_SCHEMA = "main"
+DEFAULT_DBT_SCHEMA = "analytics"
 VALID_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 

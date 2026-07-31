@@ -159,7 +159,8 @@ trace e senza usare dati fittizi.
 Il percorso predefinito è `data/warehouse/ecommerce.duckdb`, risolto rispetto
 alla root del progetto e indipendente dalla directory corrente. Per un database
 locale alternativo si può impostare `ECOMMERCE_DB_PATH`; se dbt pubblica i mart
-in uno schema diverso da `main`, usare `ECOMMERCE_DBT_SCHEMA`. La struttura
+in uno schema diverso da `analytics`, usare `ECOMMERCE_DBT_SCHEMA`. Lo schema
+predefinito della demo è `analytics`. La struttura
 essenziale è composta dall'entry point `streamlit_app.py` e dal package
 `dashboard/`, che separa configurazione, query, accesso read-only e
 presentazione.
