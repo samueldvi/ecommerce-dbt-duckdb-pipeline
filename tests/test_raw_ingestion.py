@@ -12,6 +12,7 @@ import tempfile
 import threading
 import traceback
 import unittest
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
@@ -637,6 +638,99 @@ class RawIngestionTests(unittest.TestCase):
         self.assertEqual(second.rows_inserted, 0)
         self.assertEqual(raw_counts(self.database_path), (0, 0, source_rows, 1))
 
+    def test_customer_snapshot_accepts_three_versioned_customer_keys(
+        self,
+    ) -> None:
+        source = self.input_root / "run_1/customers.csv"
+        columns, rows = read_csv(source)
+        counts = Counter(row["customer_id"] for row in rows)
+        customer_to_reduce = next(
+            customer_id
+            for customer_id, count in counts.items()
+            if count > 1
+        )
+        retained_version = False
+        reduced_rows = []
+        for row in rows:
+            if row["customer_id"] != customer_to_reduce:
+                reduced_rows.append(row)
+            elif not retained_version:
+                reduced_rows.append(row)
+                retained_version = True
+        write_csv(source, columns, reduced_rows)
+
+        result = self.ingestor.ingest_file(Path("run_1/customers.csv"))
+
+        connection = duckdb.connect(str(self.database_path), read_only=True)
+        try:
+            row_count, distinct_keys, versioned_keys = connection.execute(
+                """
+                SELECT
+                    (SELECT COUNT(*) FROM raw.customers),
+                    COUNT(*),
+                    COUNT(*) FILTER (WHERE version_count > 1)
+                FROM (
+                    SELECT customer_id, COUNT(*) AS version_count
+                    FROM raw.customers
+                    GROUP BY customer_id
+                )
+                """
+            ).fetchone()
+        finally:
+            connection.close()
+        self.assertEqual(result.rows_inserted, len(reduced_rows))
+        self.assertEqual(
+            (row_count, distinct_keys, versioned_keys),
+            (len(reduced_rows), 200, 3),
+        )
+
+    def test_product_snapshot_accepts_duplicate_business_keys(self) -> None:
+        source = self.input_root / "run_1/products.csv"
+        columns, rows = read_csv(source)
+        duplicate = dict(rows[0])
+        duplicate["product_name"] = "ZZZ Canonical Product Variant"
+        rows.append(duplicate)
+        write_csv(source, columns, rows)
+
+        result = self.ingestor.ingest_file(Path("run_1/products.csv"))
+
+        connection = duckdb.connect(str(self.database_path), read_only=True)
+        try:
+            actual = connection.execute(
+                """
+                SELECT COUNT(*), COUNT(DISTINCT product_id)
+                FROM raw.products
+                """
+            ).fetchone()
+        finally:
+            connection.close()
+        self.assertEqual(result.rows_inserted, 81)
+        self.assertEqual(actual, (81, 80))
+
+    def test_out_of_domain_sales_channel_is_preserved_in_raw(self) -> None:
+        source = self.input_root / "run_3/orders.csv"
+        columns, rows = read_csv(source)
+        target_key = rows[0]["order_line_id"]
+        rows[0]["sales_channel"] = "store"
+        write_csv(source, columns, rows)
+
+        result = self.ingestor.ingest_file(Path("run_3/orders.csv"))
+
+        connection = duckdb.connect(str(self.database_path), read_only=True)
+        try:
+            preserved_value = connection.execute(
+                """
+                SELECT sales_channel
+                FROM raw.order_lines
+                WHERE order_line_id = ?
+                """,
+                [target_key],
+            ).fetchone()[0]
+        finally:
+            connection.close()
+        self.assertEqual(result.rows_inserted, len(rows))
+        self.assertEqual(preserved_value, "store")
+
     def test_logical_batch_load_and_replay_are_atomic_and_idempotent(
         self,
     ) -> None:
@@ -649,6 +743,69 @@ class RawIngestionTests(unittest.TestCase):
         self.assertEqual(second.files_skipped, 3)
         self.assertEqual(second.rows_inserted, 0)
         self.assertEqual(raw_counts(self.database_path), (204, 80, 3_000, 3))
+
+    def test_run_2_rejects_existing_order_keys_without_partial_changes(
+        self,
+    ) -> None:
+        self.ingestor.ingest_batch("run_1")
+        source = self.input_root / "run_2/orders.csv"
+        columns, rows = read_csv(source)
+        run_1_rows = read_csv(self.input_root / "run_1/orders.csv")[1]
+        rows[0]["order_line_id"] = run_1_rows[0]["order_line_id"]
+        write_csv(source, columns, rows)
+
+        with self.assertRaisesRegex(
+            SchemaValidationError, "must contain only new order_line_id"
+        ):
+            self.ingestor.ingest_batch("run_2")
+
+        self.assertEqual(raw_counts(self.database_path), (204, 80, 3_000, 3))
+
+    def test_run_3_rejects_existing_order_keys_without_partial_changes(
+        self,
+    ) -> None:
+        self.ingestor.ingest_batch("run_1")
+        self.ingestor.ingest_batch("run_2")
+        source = self.input_root / "run_3/orders.csv"
+        columns, rows = read_csv(source)
+        run_2_rows = read_csv(self.input_root / "run_2/orders.csv")[1]
+        rows[0]["order_line_id"] = run_2_rows[0]["order_line_id"]
+        write_csv(source, columns, rows)
+
+        with self.assertRaisesRegex(
+            SchemaValidationError, "must contain only new order_line_id"
+        ):
+            self.ingestor.ingest_batch("run_3")
+
+        self.assertEqual(raw_counts(self.database_path), (204, 80, 4_000, 4))
+
+    def test_late_batch_rejects_correction_outside_run_1_atomically(
+        self,
+    ) -> None:
+        self.ingestor.ingest_batch("run_1")
+        self.ingestor.ingest_batch("run_2")
+        self.ingestor.ingest_batch("run_3")
+        source = self.input_root / "run_3/late_arriving/orders.csv"
+        columns, rows = read_csv(source)
+        run_1_keys = {
+            row["order_line_id"]
+            for row in read_csv(self.input_root / "run_1/orders.csv")[1]
+        }
+        correction = next(
+            row for row in rows if row["order_line_id"] in run_1_keys
+        )
+        run_2_key = read_csv(self.input_root / "run_2/orders.csv")[1][0][
+            "order_line_id"
+        ]
+        correction["order_line_id"] = run_2_key
+        write_csv(source, columns, rows)
+
+        with self.assertRaisesRegex(
+            SchemaValidationError, "exclusively in Run 1"
+        ):
+            self.ingestor.ingest_batch("run_3_late_arriving")
+
+        self.assertEqual(raw_counts(self.database_path), (204, 80, 5_000, 5))
 
     def test_changed_source_path_conflicts_without_partial_changes(self) -> None:
         source = Path("run_1/products.csv")
