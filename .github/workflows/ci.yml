@@ -24,6 +24,10 @@ jobs:
 
     env:
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      fix/ci-runner-temp
+      
+      PYTHONPYCACHEPREFIX: ${{ runner.temp }}/python-cache
+      main
 
     steps:
       - name: Check out repository
@@ -41,8 +45,12 @@ jobs:
         run: python -m pip check
 
       - name: Compile Python sources
+      
+      fix/ci-runner-temp
         env:
           PYTHONPYCACHEPREFIX: ${{ runner.temp }}/pycache
+          
+          main
         run: python -m compileall scripts tests
 
       - name: Run automated tests
