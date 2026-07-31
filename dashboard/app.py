@@ -1,39 +1,57 @@
-"""Single-page Streamlit interface backed by read-only DuckDB queries."""
+"""Business-first Streamlit interface backed by read-only DuckDB queries."""
 
 from __future__ import annotations
 
+from html import escape
 from pathlib import Path
 
 import streamlit as st
 
+from .charts import (
+    category_revenue_spec,
+    horizontal_bar_spec,
+    revenue_trend_spec,
+    weekly_region_spec,
+)
 from .config import DashboardConfig, DashboardConfigurationError, load_dashboard_config
 from .data import (
     DashboardDataError,
+    DashboardFilters,
+    DashboardMetadata,
     DashboardSnapshot,
     DatabaseFingerprint,
     DatabaseIncompleteError,
     database_fingerprint,
+    load_dashboard_metadata,
     load_dashboard_snapshot,
 )
-from .presentation import chart_records, format_currency, format_integer
+from .i18n import SUPPORTED_LANGUAGES, Translator
+from .presentation import (
+    format_currency,
+    format_datetime,
+    format_integer,
+    format_period,
+)
+from .theme import THEMES, ThemeTokens, theme_css, theme_tokens
 
 BOOTSTRAP_COMMANDS = """python scripts/generate_synthetic_data.py
 python scripts/ingest_raw_data.py load-all
 dbt build --profiles-dir .
 streamlit run streamlit_app.py"""
+ALL_FILTER_VALUES = "__all__"
 
 
 @st.cache_data(show_spinner=False)
-def _load_cached_snapshot(
+def _load_cached_metadata(
     database_path: str,
     dbt_schema: str,
     project_root: str,
     fingerprint: DatabaseFingerprint,
-) -> DashboardSnapshot:
-    """Cache aggregates and invalidate them with the database fingerprint."""
+) -> DashboardMetadata:
+    """Cache metadata and invalidate it when the DuckDB file changes."""
 
     del fingerprint
-    return load_dashboard_snapshot(
+    return load_dashboard_metadata(
         DashboardConfig(
             database_path=Path(database_path),
             dbt_schema=dbt_schema,
@@ -42,289 +60,568 @@ def _load_cached_snapshot(
     )
 
 
+@st.cache_data(show_spinner=False)
+def _load_cached_snapshot(
+    database_path: str,
+    dbt_schema: str,
+    project_root: str,
+    fingerprint: DatabaseFingerprint,
+    filters: DashboardFilters,
+) -> DashboardSnapshot:
+    """Cache bounded aggregates by database fingerprint and active filters."""
+
+    del fingerprint
+    return load_dashboard_snapshot(
+        DashboardConfig(
+            database_path=Path(database_path),
+            dbt_schema=dbt_schema,
+            project_root=Path(project_root),
+        ),
+        filters,
+    )
+
+
+def _initialize_preferences() -> tuple[str, str]:
+    st.session_state.setdefault("dashboard_language", "it")
+    st.session_state.setdefault("dashboard_theme", "light")
+    language = st.session_state["dashboard_language"]
+    theme = st.session_state["dashboard_theme"]
+    if language not in SUPPORTED_LANGUAGES:
+        language = "it"
+        st.session_state["dashboard_language"] = language
+    if theme not in THEMES:
+        theme = "light"
+        st.session_state["dashboard_theme"] = theme
+    return language, theme
+
+
+def _store_widget_value(widget_key: str, state_key: str) -> None:
+    st.session_state[state_key] = st.session_state[widget_key]
+
+
+def _store_filter_widget_value(widget_key: str, state_key: str) -> None:
+    value = st.session_state[widget_key]
+    st.session_state[state_key] = None if value == ALL_FILTER_VALUES else value
+
+
+def _render_preferences(translator: Translator) -> None:
+    spacer, language_column, theme_column = st.columns([6, 1.4, 1.4])
+    del spacer
+    with language_column:
+        st.selectbox(
+            translator("language"),
+            SUPPORTED_LANGUAGES,
+            format_func=lambda value: translator(f"language_{value}"),
+            key="dashboard_language",
+        )
+    with theme_column:
+        theme_widget_key = f"dashboard_theme_widget_{translator.language}"
+        st.session_state[theme_widget_key] = st.session_state["dashboard_theme"]
+        st.selectbox(
+            translator("theme"),
+            tuple(THEMES),
+            format_func=lambda value: translator(f"theme_{value}"),
+            key=theme_widget_key,
+            on_change=_store_widget_value,
+            args=(theme_widget_key, "dashboard_theme"),
+        )
+
+
 def _render_bootstrap_error(
     config: DashboardConfig | None,
     error: Exception,
+    translator: Translator,
 ) -> None:
-    st.error("La demo non può leggere un database analitico completo.")
-    if config is not None:
-        st.write(f"Risorsa configurata: `{config.database_label}`")
+    st.error(translator("error_title"))
     if isinstance(error, DatabaseIncompleteError):
-        st.write("Risorse mancanti: " + ", ".join(error.missing_resources))
+        st.write(translator("error_incomplete"))
+    elif isinstance(error, DashboardConfigurationError):
+        st.write(translator("error_query"))
     else:
-        st.write(
-            "Il file manca, è illeggibile oppure non è un database DuckDB "
-            "valido."
-        )
-    st.write("Dalla root del repository eseguire:")
+        st.write(translator("error_missing"))
+    st.write(translator("error_action"))
     st.code(BOOTSTRAP_COMMANDS, language="bash")
+    if config is not None:
+        with st.expander(translator("project_info")):
+            st.write(
+                translator(
+                    "project_config",
+                    database=escape(config.database_label),
+                    schema=escape(config.dbt_schema),
+                )
+            )
 
 
-def _render_overview(config: DashboardConfig) -> None:
-    st.title("E-commerce Incremental Analytics")
-    st.write(
-        "Una demo read-only della pipeline che acquisisce batch CSV, conserva "
-        "le versioni raw e pubblica uno star schema analitico con dbt."
-    )
-    st.markdown(
-        "**CSV batch → Raw transazionale → DuckDB → dbt staging / "
-        "intermediate / marts → analisi → Streamlit**"
-    )
-    st.caption(
-        "Python 3.12 · DuckDB · dbt Core · Streamlit · "
-        f"database: {config.database_label} · schema: {config.dbt_schema}"
-    )
-    with st.expander("Come funziona l'incrementalità"):
-        st.write(
-            "Run 1, Run 2 e Run 3 aggiungono chiavi nuove su tre finestre "
-            "commerciali. Il batch late-arriving contiene fatti storici "
-            "arrivati dopo e correction prevalenti. Il manifest rende il "
-            "replay dello stesso file un no-op; dbt mantiene una sola versione "
-            "corrente per order_line_id."
-        )
-
-
-def _render_kpis(snapshot: DashboardSnapshot) -> None:
-    st.header("KPI principali")
-    if not snapshot.kpis.rows:
-        st.info("Il mart è disponibile ma non contiene ancora righe analitiche.")
+def _initialize_filter_state(metadata: DashboardMetadata) -> None:
+    if metadata.period_start is None or metadata.period_end is None:
         return
+    current = st.session_state.get("dashboard_date_range")
+    if not (
+        isinstance(current, (tuple, list))
+        and len(current) == 2
+        and metadata.period_start <= current[0] <= current[1] <= metadata.period_end
+    ):
+        st.session_state["dashboard_date_range"] = (
+            metadata.period_start,
+            metadata.period_end,
+        )
+    if st.session_state.get("dashboard_category") not in (
+        None,
+        *metadata.categories,
+    ):
+        st.session_state["dashboard_category"] = None
+    if st.session_state.get("dashboard_region") not in (None, *metadata.regions):
+        st.session_state["dashboard_region"] = None
+
+
+def _reset_filters(metadata: DashboardMetadata, language: str) -> None:
+    st.session_state["dashboard_date_range"] = (
+        metadata.period_start,
+        metadata.period_end,
+    )
+    st.session_state["dashboard_category"] = None
+    st.session_state["dashboard_region"] = None
+    st.session_state[f"dashboard_category_widget_{language}"] = ALL_FILTER_VALUES
+    st.session_state[f"dashboard_region_widget_{language}"] = ALL_FILTER_VALUES
+
+
+def _render_filters(
+    metadata: DashboardMetadata,
+    translator: Translator,
+) -> DashboardFilters | None:
+    if metadata.period_start is None or metadata.period_end is None:
+        return None
+    st.subheader(translator("filters"))
+    st.caption(translator("filter_help"))
+    date_column, category_column, region_column, action_column = st.columns(
+        [2.2, 1.4, 1.4, 1]
+    )
+    with date_column:
+        selected_dates = st.date_input(
+            translator("date_range"),
+            min_value=metadata.period_start,
+            max_value=metadata.period_end,
+            key="dashboard_date_range",
+        )
+    with category_column:
+        category_widget_key = (
+            f"dashboard_category_widget_{translator.language}"
+        )
+        category_options = (ALL_FILTER_VALUES, *metadata.categories)
+        st.session_state[category_widget_key] = (
+            st.session_state.get("dashboard_category") or ALL_FILTER_VALUES
+        )
+        selected_category = st.selectbox(
+            translator("category"),
+            category_options,
+            format_func=lambda value: (
+                translator("all_categories")
+                if value == ALL_FILTER_VALUES
+                else value
+            ),
+            key=category_widget_key,
+            on_change=_store_filter_widget_value,
+            args=(category_widget_key, "dashboard_category"),
+        )
+    with region_column:
+        region_widget_key = f"dashboard_region_widget_{translator.language}"
+        region_options = (ALL_FILTER_VALUES, *metadata.regions)
+        st.session_state[region_widget_key] = (
+            st.session_state.get("dashboard_region") or ALL_FILTER_VALUES
+        )
+        selected_region = st.selectbox(
+            translator("region"),
+            region_options,
+            format_func=lambda value: (
+                translator("all_regions") if value == ALL_FILTER_VALUES else value
+            ),
+            key=region_widget_key,
+            on_change=_store_filter_widget_value,
+            args=(region_widget_key, "dashboard_region"),
+        )
+    with action_column:
+        st.write("")
+        st.button(
+            translator("reset_filters"),
+            on_click=_reset_filters,
+            args=(metadata, translator.language),
+            width="stretch",
+        )
+    if len(selected_dates) != 2:
+        return None
+    return DashboardFilters(
+        start_date=selected_dates[0],
+        end_date=selected_dates[1],
+        category=(
+            None if selected_category == ALL_FILTER_VALUES else selected_category
+        ),
+        region=None if selected_region == ALL_FILTER_VALUES else selected_region,
+    )
+
+
+def _render_header(
+    metadata: DashboardMetadata,
+    filters: DashboardFilters | None,
+    translator: Translator,
+) -> None:
+    period_start = filters.start_date if filters else metadata.period_start
+    period_end = filters.end_date if filters else metadata.period_end
+    st.html(
+        f"""
+        <section class="dashboard-hero">
+          <div class="dashboard-eyebrow">{escape(translator('overview_eyebrow'))}</div>
+          <h1>{escape(translator('title'))}</h1>
+          <p>{escape(translator('subtitle'))}</p>
+          <div class="dashboard-meta">
+            <span><strong>{escape(translator('period'))}:</strong>
+              {escape(format_period(period_start, period_end, translator.language))}</span>
+            <span><strong>{escape(translator('last_update'))}:</strong>
+              {escape(format_datetime(metadata.last_ingested_at, translator.language))}</span>
+          </div>
+        </section>
+        """
+    )
+
+
+def _render_kpis(snapshot: DashboardSnapshot, translator: Translator) -> bool:
+    if not snapshot.kpis.rows:
+        st.info(translator("empty_data"))
+        return False
     kpis = snapshot.kpis.records()[0]
-    primary_columns = st.columns(3)
-    primary_columns[0].metric(
-        "Fatturato valido", format_currency(kpis["total_revenue"])
+    if kpis["order_lines"] == 0:
+        st.info(translator("empty_chart"))
+    cards = (
+        ("kpi_revenue", format_currency(kpis["total_revenue"], translator.language)),
+        ("kpi_orders", format_integer(kpis["distinct_orders"], translator.language)),
+        (
+            "kpi_average_order",
+            format_currency(
+                kpis["average_revenue_order_value"], translator.language
+            ),
+        ),
+        ("kpi_customers", format_integer(kpis["known_customers"], translator.language)),
     )
-    primary_columns[1].metric(
-        "Ordini distinti", format_integer(kpis["distinct_orders"])
+    card_html = "".join(
+        "<article class='kpi-card'>"
+        f"<div class='kpi-label'>{escape(translator(label))}</div>"
+        f"<div class='kpi-value'>{escape(value)}</div>"
+        "</article>"
+        for label, value in cards
     )
-    primary_columns[2].metric(
-        "Valore medio ordine valido",
-        format_currency(kpis["average_revenue_order_value"]),
-        help="Fatturato valido diviso per gli ordini con almeno una riga contribuente.",
-    )
-    secondary_columns = st.columns(2)
-    secondary_columns[0].metric(
-        "Clienti noti", format_integer(kpis["known_customers"])
-    )
-    secondary_columns[1].metric(
-        "Righe correnti", format_integer(kpis["order_lines"])
-    )
-    st.caption(
-        "Il fatturato usa esclusivamente `fct_order_lines.revenue`; la demo "
-        "non ricostruisce le regole di validità economica."
-    )
+    st.html(f"<section class='kpi-grid'>{card_html}</section>")
+    st.caption(translator("kpi_note"))
+    return kpis["order_lines"] > 0
 
 
 def _chart_or_empty(
-    records: list[dict[str, object]],
-    *,
-    x: str,
-    y: str,
-    x_label: str,
-    y_label: str,
-    color: str | None = None,
-    horizontal: bool = False,
+    spec: dict[str, object],
+    has_rows: bool,
+    translator: Translator,
 ) -> None:
-    if not records:
-        st.info("Nessun dato disponibile per questa analisi.")
+    if not has_rows:
+        st.info(translator("empty_chart"))
         return
-    st.bar_chart(
-        chart_records(records),
-        x=x,
-        y=y,
-        x_label=x_label,
-        y_label=y_label,
-        color=color,
-        horizontal=horizontal,
-        sort=False,
-        stack=False,
-        width="stretch",
-        height=340,
+    st.vega_lite_chart(spec, theme=None, width="stretch")
+
+
+def _render_sales(
+    snapshot: DashboardSnapshot,
+    translator: Translator,
+    tokens: ThemeTokens,
+) -> None:
+    st.header(translator("sales_section"))
+    st.subheader(translator("sales_trend_title"))
+    st.caption(translator("sales_trend_caption"))
+    trend_records = snapshot.revenue_trend.records()
+    _chart_or_empty(
+        revenue_trend_spec(
+            trend_records,
+            description=translator("sales_trend_caption"),
+            date_label=translator("axis_date"),
+            revenue_label=translator("axis_revenue"),
+            tokens=tokens,
+        ),
+        bool(trend_records),
+        translator,
     )
 
+    st.subheader(translator("category_title"))
+    st.caption(translator("category_caption"))
+    category_records = snapshot.revenue_by_category_month.records()
+    _chart_or_empty(
+        category_revenue_spec(
+            category_records,
+            description=translator("category_caption"),
+            revenue_label=translator("axis_revenue"),
+            category_label=translator("axis_category"),
+            tokens=tokens,
+        ),
+        bool(category_records),
+        translator,
+    )
+    with st.expander(translator("category_ranking")):
+        ranking = [
+            {
+                translator("month"): record["revenue_month"],
+                translator("ranking_position"): record["revenue_position"],
+                translator("category"): record["category"],
+                translator("revenue"): record["total_revenue"],
+            }
+            for record in snapshot.category_ranking.records()
+        ]
+        if ranking:
+            st.dataframe(ranking, hide_index=True, width="stretch")
+        else:
+            st.info(translator("empty_chart"))
 
-def _render_analytics(snapshot: DashboardSnapshot) -> None:
-    st.header("Analisi Gold")
-    left, right = st.columns(2)
-    with left:
-        st.subheader("Fatturato mensile per categoria")
-        st.caption("Euro, aggregati per mese commerciale e categoria prodotto.")
-        _chart_or_empty(
-            snapshot.revenue_by_category_month.records(),
-            x="revenue_month",
-            y="total_revenue",
-            x_label="Mese",
-            y_label="Fatturato (€)",
-            color="category",
-        )
-    with right:
-        st.subheader("Top 10 clienti per spesa")
-        st.caption("Euro di fatturato valido sull'intero periodo.")
-        _chart_or_empty(
-            snapshot.top_customers.records(),
-            x="total_spend",
-            y="customer_name",
-            x_label="Spesa totale (€)",
-            y_label="Cliente",
-            horizontal=True,
-        )
 
-    left, right = st.columns(2)
-    with left:
-        st.subheader("Ordini completed per regione e settimana")
-        st.caption("Conteggio distinto degli ordini con ricavo valido.")
-        weekly_records = snapshot.orders_by_region_week.records()
-        for record in weekly_records:
+def _render_customers_regions(
+    snapshot: DashboardSnapshot,
+    translator: Translator,
+    tokens: ThemeTokens,
+) -> None:
+    st.header(translator("customers_territory"))
+    customer_column, region_column = st.columns(2)
+    with customer_column:
+        st.subheader(translator("top_customers_title"))
+        st.caption(translator("top_customers_caption"))
+        customers = snapshot.top_customers.records()
+        _chart_or_empty(
+            horizontal_bar_spec(
+                customers,
+                category_field="customer_name",
+                value_field="total_spend",
+                category_label=translator("axis_customer"),
+                value_label=translator("axis_revenue"),
+                description=translator("top_customers_caption"),
+                tokens=tokens,
+            ),
+            bool(customers),
+            translator,
+        )
+    with region_column:
+        st.subheader(translator("regions_title"))
+        st.caption(translator("regions_caption"))
+        regions = snapshot.region_summary.records()
+        _chart_or_empty(
+            horizontal_bar_spec(
+                regions,
+                category_field="customer_region",
+                value_field="completed_order_count",
+                category_label=translator("axis_region"),
+                value_label=translator("axis_orders"),
+                description=translator("regions_caption"),
+                tokens=tokens,
+            ),
+            bool(regions),
+            translator,
+        )
+    with st.expander(translator("weekly_detail")):
+        weekly = snapshot.orders_by_region_week.records()
+        for record in weekly:
             record["year_week"] = (
                 f"{record['order_year']}-W{int(record['iso_week_number']):02d}"
             )
         _chart_or_empty(
-            weekly_records,
-            x="year_week",
-            y="completed_order_count",
-            x_label="Settimana ISO",
-            y_label="Ordini distinti",
-            color="customer_region",
-        )
-    with right:
-        st.subheader("Ranking mensile delle categorie")
-        st.caption("Dense rank per fatturato valido; posizione 1 = maggiore ricavo.")
-        ranking_records = snapshot.category_ranking.records()
-        for record in ranking_records:
-            record["ranked_category"] = (
-                f"#{record['revenue_position']} · {record['category']}"
-            )
-        _chart_or_empty(
-            ranking_records,
-            x="total_revenue",
-            y="ranked_category",
-            x_label="Fatturato (€)",
-            y_label="Posizione e categoria",
-            horizontal=True,
+            weekly_region_spec(
+                weekly,
+                description=translator("weekly_detail"),
+                week_label=translator("axis_date"),
+                region_label=translator("axis_region"),
+                orders_label=translator("axis_orders"),
+                tokens=tokens,
+            ),
+            bool(weekly),
+            translator,
         )
 
 
-def _render_incremental(snapshot: DashboardSnapshot) -> None:
-    st.header("Caricamenti incrementali")
-    records = snapshot.incremental_loads.records()
-    if not records:
-        st.info("Il manifest non contiene ancora batch di righe ordine.")
-    else:
-        table_records = []
-        for record in records:
-            table_records.append(
-                {
-                    "Batch": record["batch_label"],
-                    "Righe ricevute": record["received_rows"],
-                    "Nuove chiavi": record["new_keys"],
-                    "Correction": record["corrections"],
-                    "Chiavi cumulative": record["cumulative_keys"],
-                }
-            )
-        st.dataframe(table_records, hide_index=True, width="stretch")
-    st.write(
-        "I late-arriving facts hanno una data commerciale storica ma arrivano "
-        "in un batch successivo. Le correction sono versioni più recenti di "
-        "chiavi Run 1 e non aumentano il numero di chiavi correnti. I numeri "
-        "sopra descrivono lo stato persistito, non un monitoraggio live."
-    )
-
-
-def _render_data_quality(snapshot: DashboardSnapshot) -> None:
-    st.header("Data Quality")
+def _quality_rows(
+    snapshot: DashboardSnapshot,
+    translator: Translator,
+) -> list[dict[str, object]]:
     if not snapshot.data_quality.rows:
-        st.info("Nessuna metrica di qualità disponibile.")
-        return
+        return []
     quality = snapshot.data_quality.records()[0]
-    structural_ok = (
+    mappings = (
+        ("duplicate_keys", "duplicate_current_keys"),
+        ("invalid_channels", "invalid_sales_channels"),
+        ("invalid_statuses", "invalid_order_statuses"),
+        ("null_prices", "null_unit_prices"),
+        ("negative_prices", "negative_unit_prices"),
+        ("non_positive_quantities", "non_positive_quantities"),
+        ("cancelled_lines", "cancelled_lines"),
+        ("unknown_customers", "unknown_customers"),
+        ("unknown_products", "unknown_products"),
+        ("invalid_economic_lines", "economically_invalid_lines"),
+    )
+    return [
+        {
+            translator("quality_metric"): translator(label),
+            translator("quality_records"): quality[column],
+        }
+        for label, column in mappings
+    ]
+
+
+def _render_data_status(
+    snapshot: DashboardSnapshot,
+    metadata: DashboardMetadata,
+    translator: Translator,
+) -> None:
+    st.header(translator("data_status"))
+    quality = snapshot.data_quality.records()[0] if snapshot.data_quality.rows else {}
+    structural_ok = bool(quality) and (
         quality["duplicate_current_keys"] == 0
         and quality["invalid_sales_channels"] == 0
     )
-    if structural_ok:
-        st.success(
-            "Grain corrente e dominio sales_channel conformi; le anomalie "
-            "funzionali restano osservabili sotto."
-        )
-    else:
-        st.warning("Sono presenti violazioni strutturali nel mart corrente.")
-
-    structural, observed = st.columns(2)
-    with structural:
-        st.subheader("Vincoli correnti")
-        st.metric("Chiavi duplicate", format_integer(quality["duplicate_current_keys"]))
-        st.metric(
-            "Canali fuori dominio",
-            format_integer(quality["invalid_sales_channels"]),
-        )
-        st.metric(
-            "Stati ordine fuori dominio",
-            format_integer(quality["invalid_order_statuses"]),
-        )
-    with observed:
-        st.subheader("Anomalie conservate")
-        anomaly_rows = [
-            {"Metrica": "Prezzi nulli", "Righe": quality["null_unit_prices"]},
-            {"Metrica": "Prezzi negativi", "Righe": quality["negative_unit_prices"]},
-            {
-                "Metrica": "Quantità non positive",
-                "Righe": quality["non_positive_quantities"],
-            },
-            {"Metrica": "Righe cancellate", "Righe": quality["cancelled_lines"]},
-            {"Metrica": "Cliente Unknown", "Righe": quality["unknown_customers"]},
-            {"Metrica": "Prodotto Unknown", "Righe": quality["unknown_products"]},
-            {
-                "Metrica": "Non valide economicamente",
-                "Righe": quality["economically_invalid_lines"],
-            },
-        ]
-        st.dataframe(anomaly_rows, hide_index=True, width="stretch")
-
-    st.caption(
-        "Queste metriche sono query descrittive sul mart. I controlli di "
-        "schema/checksum appartengono all'ingestion; i test dbt vengono "
-        "eseguiti con `dbt build` e non sono presentati come stato live."
+    anomaly_columns = (
+        "invalid_order_statuses",
+        "null_unit_prices",
+        "negative_unit_prices",
+        "non_positive_quantities",
+        "cancelled_lines",
+        "unknown_customers",
+        "unknown_products",
     )
+    anomaly_count = sum(bool(quality.get(column, 0)) for column in anomaly_columns)
+    status_class = "status-ready" if structural_ok else "status-attention"
+    status_label = "status_ready" if structural_ok else "status_attention"
+    status_cards = (
+        (
+            translator("data_status"),
+            translator(status_label),
+            status_class,
+        ),
+        (
+            translator("checks_passed"),
+            "2 / 2" if structural_ok else "0 / 2",
+            status_class,
+        ),
+        (
+            translator("anomaly_types"),
+            format_integer(anomaly_count, translator.language),
+            "",
+        ),
+        (
+            translator("last_update"),
+            format_datetime(metadata.last_ingested_at, translator.language),
+            "",
+        ),
+    )
+    cards = "".join(
+        "<article class='status-card'>"
+        f"<div class='status-label'>{escape(label)}</div>"
+        f"<div class='status-value {css_class}'>{escape(value)}</div>"
+        "</article>"
+        for label, value, css_class in status_cards
+    )
+    st.html(f"<section class='status-grid'>{cards}</section>")
+    st.caption(translator("data_status_note"))
+
+    with st.expander(translator("load_history")):
+        batch_rows = []
+        for record in snapshot.incremental_loads.records():
+            sequence = int(record["batch_sequence"])
+            label_key = (
+                "batch_late" if sequence == 4 else f"batch_run_{sequence}"
+            )
+            batch_rows.append(
+                {
+                    translator("batch"): translator(label_key),
+                    translator("processed_records"): record["received_rows"],
+                    translator("new_keys"): record["new_keys"],
+                    translator("updated_records"): record["corrections"],
+                    translator("cumulative_keys"): record["cumulative_keys"],
+                }
+            )
+        if batch_rows:
+            st.dataframe(batch_rows, hide_index=True, width="stretch")
+        else:
+            st.info(translator("batch_empty"))
+    with st.expander(translator("quality_details")):
+        rows = _quality_rows(snapshot, translator)
+        if rows:
+            st.dataframe(rows, hide_index=True, width="stretch")
+        else:
+            st.info(translator("quality_empty"))
 
 
-def _render_limits() -> None:
-    st.header("Limiti dichiarati")
-    st.info(
-        "DuckDB è utilizzato come motore analitico locale, leggero e "
-        "production-like per questa implementazione. Non sostituisce una "
-        "piattaforma enterprise distribuita o multiwriter."
-    )
-    st.write(
-        "Il repository include un piano concettuale verso Databricks e Delta "
-        "Lake; non rappresenta un deployment cloud già realizzato."
-    )
+def _render_project_info(config: DashboardConfig, translator: Translator) -> None:
+    with st.expander(translator("project_info")):
+        st.write(translator("project_architecture"))
+        st.write(translator("project_incremental"))
+        st.write(translator("project_limit"))
+        st.write(translator("project_transfer"))
+        st.caption(
+            translator(
+                "project_config",
+                database=config.database_label,
+                schema=config.dbt_schema,
+            )
+        )
 
 
 def run() -> None:
-    """Render the complete dashboard or a controlled bootstrap message."""
+    """Render the dashboard or a controlled, localized bootstrap message."""
 
     st.set_page_config(
-        page_title="E-commerce Analytics",
-        page_icon="📊",
+        page_title="E-commerce analytics",
         layout="wide",
         initial_sidebar_state="collapsed",
     )
+    language, theme = _initialize_preferences()
+    translator = Translator(language)
+    tokens = theme_tokens(theme)
+    st.html(theme_css(tokens))
+    _render_preferences(translator)
+
     config: DashboardConfig | None = None
     try:
         config = load_dashboard_config()
         fingerprint = database_fingerprint(config.database_path)
-        snapshot = _load_cached_snapshot(
+        metadata = _load_cached_metadata(
             str(config.database_path),
             config.dbt_schema,
             str(config.project_root),
             fingerprint,
         )
+        _initialize_filter_state(metadata)
+        selected_range = st.session_state.get("dashboard_date_range", ())
+        active_filters = (
+            DashboardFilters(
+                selected_range[0],
+                selected_range[1],
+                st.session_state.get("dashboard_category"),
+                st.session_state.get("dashboard_region"),
+            )
+            if len(selected_range) == 2
+            else None
+        )
+        _render_header(metadata, active_filters, translator)
+        filters = _render_filters(metadata, translator)
+        if filters is None:
+            st.info(translator("empty_data"))
+            return
+        with st.spinner(translator("loading")):
+            snapshot = _load_cached_snapshot(
+                str(config.database_path),
+                config.dbt_schema,
+                str(config.project_root),
+                fingerprint,
+                filters,
+            )
     except (DashboardConfigurationError, DashboardDataError) as error:
-        _render_bootstrap_error(config, error)
+        _render_bootstrap_error(config, error, translator)
+        return
+    except Exception:
+        st.error(translator("error_title"))
+        st.write(translator("error_unexpected"))
         return
 
-    _render_overview(config)
-    _render_kpis(snapshot)
-    _render_analytics(snapshot)
-    _render_incremental(snapshot)
-    _render_data_quality(snapshot)
-    _render_limits()
+    has_data = _render_kpis(snapshot, translator)
+    if has_data:
+        _render_sales(snapshot, translator, tokens)
+        _render_customers_regions(snapshot, translator, tokens)
+    _render_data_status(snapshot, metadata, translator)
+    _render_project_info(config, translator)

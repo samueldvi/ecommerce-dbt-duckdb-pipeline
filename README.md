@@ -135,10 +135,11 @@ descritti in [Gestione incrementale](docs/GESTIONE_INCREMENTALE.md).
 
 ## Demo Streamlit
 
-La demo interroga in sola lettura i mart DuckDB e presenta KPI, quattro analisi,
-stato storico dei batch e metriche trasparenti di data quality. Non ricostruisce
-la logica economica in Python: il fatturato proviene dalla misura `revenue`
-calcolata nella fact dbt.
+La demo interroga in sola lettura i mart DuckDB e presenta una panoramica
+business di vendite, clienti, territori e affidabilità dei dati. L'interfaccia
+è disponibile in italiano e inglese, offre temi chiaro e scuro e applica filtri
+globali per periodo, categoria e regione. Non ricostruisce la logica economica
+in Python: il fatturato proviene dalla misura `revenue` calcolata nella fact dbt.
 
 Da un clone pulito, dopo avere configurato l'ambiente come indicato sopra,
 preparare il database e avviare la demo:
@@ -153,8 +154,8 @@ streamlit run streamlit_app.py
 
 L'interfaccia è disponibile normalmente su `http://localhost:8501`. Se il
 database manca, è corrotto o non contiene raw e mart richiesti, la pagina mostra
-le risorse mancanti e gli stessi comandi di preparazione senza esporre uno stack
-trace e senza usare dati fittizi.
+un messaggio controllato e gli stessi comandi di preparazione senza esporre uno
+stack trace e senza usare dati fittizi.
 
 Il percorso predefinito è `data/warehouse/ecommerce.duckdb`, risolto rispetto
 alla root del progetto e indipendente dalla directory corrente. Per un database

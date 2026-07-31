@@ -7,18 +7,59 @@ from decimal import Decimal
 from typing import Mapping, Sequence
 
 
-def format_currency(value: object) -> str:
-    """Format a DuckDB decimal as an Italian-style euro amount."""
+def _localized_decimal(value: object, language: str, decimals: int) -> str:
+    number = value if isinstance(value, Decimal) else Decimal(str(value or 0))
+    formatted = f"{number:,.{decimals}f}"
+    if language == "it":
+        return formatted.replace(",", "_").replace(".", ",").replace("_", ".")
+    if language == "en":
+        return formatted
+    raise ValueError(f"Unsupported language: {language}")
 
-    amount = value if isinstance(value, Decimal) else Decimal(str(value or 0))
-    formatted = f"{amount:,.2f}"
-    return f"€ {formatted.replace(',', '_').replace('.', ',').replace('_', '.')}"
+
+def format_currency(value: object, language: str = "it") -> str:
+    """Format a DuckDB decimal without changing its exact query value."""
+
+    amount = _localized_decimal(value, language, 2)
+    return f"€ {amount}" if language == "it" else f"€{amount}"
 
 
-def format_integer(value: object) -> str:
-    """Format a whole number with an Italian thousands separator."""
+def format_integer(value: object, language: str = "it") -> str:
+    """Format a whole number with locale-appropriate grouping."""
 
-    return f"{int(value or 0):,}".replace(",", ".")
+    return _localized_decimal(int(value or 0), language, 0)
+
+
+def format_date(value: date | datetime, language: str = "it") -> str:
+    """Format a calendar date for the selected dashboard language."""
+
+    if language == "it":
+        return value.strftime("%d/%m/%Y")
+    if language == "en":
+        return value.strftime("%b %d, %Y")
+    raise ValueError(f"Unsupported language: {language}")
+
+
+def format_datetime(value: datetime | None, language: str = "it") -> str:
+    """Format a real ingestion timestamp, preserving its timezone label."""
+
+    if value is None:
+        return "—"
+    timezone = value.tzname() or ""
+    formatted_date = format_date(value, language)
+    return f"{formatted_date} · {value:%H:%M} {timezone}".rstrip()
+
+
+def format_period(
+    start: date | None,
+    end: date | None,
+    language: str = "it",
+) -> str:
+    """Format a bounded date range or a neutral empty marker."""
+
+    if start is None or end is None:
+        return "—"
+    return f"{format_date(start, language)} – {format_date(end, language)}"
 
 
 def chart_records(
