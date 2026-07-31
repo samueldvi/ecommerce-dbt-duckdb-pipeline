@@ -13,7 +13,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: "ci-${{ github.event.pull_request.number || github.ref }}"
+  group: "${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}"
   cancel-in-progress: true
 
 jobs:
@@ -24,17 +24,14 @@ jobs:
 
     env:
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
-      fix/ci-runner-temp
-      
-      PYTHONPYCACHEPREFIX: ${{ runner.temp }}/python-cache
-      main
+      PYTHONDONTWRITEBYTECODE: "1"
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -45,12 +42,8 @@ jobs:
         run: python -m pip check
 
       - name: Compile Python sources
-      
-      fix/ci-runner-temp
         env:
           PYTHONPYCACHEPREFIX: ${{ runner.temp }}/pycache
-          
-          main
         run: python -m compileall scripts tests
 
       - name: Run automated tests
