@@ -9,6 +9,46 @@ Il progetto costruisce un modello dimensionale e simula più caricamenti per ges
 I contratti dei dataset e le regole funzionali sono descritti nella
 [documentazione dei contratti](docs/data_contracts.md).
 
+## TL;DR — Il progetto in 2 minuti
+
+Questa pipeline risolve un caso e-commerce incrementale riproducibile: genera
+dati sintetici, li acquisisce transazionalmente e costruisce uno star schema
+pronto per analisi, mantenendo osservabili anomalie e versioni sorgente.
+
+- **Architettura:** Python genera e carica i CSV; DuckDB conserva raw data e
+  manifest; dbt organizza staging, intermediate e mart dimensionali; le query
+  in `analyses/` consumano esclusivamente il livello Gold.
+- **Incrementalità:** tre finestre ordinarie coprono 30 giorni. Il batch
+  separato late-arriving applica 10 insert storici e 5 correction prevalenti;
+  il replay è idempotente.
+- **Schema evolution:** `sales_channel` compare soltanto nel Run 3 ordinario;
+  Run 1, Run 2 e late-arriving restano compatibili con valore normalizzato a
+  `NULL`.
+- **Risultato verificato:** 5.010 `order_line_id` correnti, 10 insert tardivi,
+  5 update e zero duplicati.
+- **Analisi:** fatturato per categoria/mese, top 10 clienti, ordini completed
+  per regione/settimana e ranking mensile delle categorie con window function.
+- **Qualità:** test automatici verificano contratti, anomalie, membri
+  `Unknown`, revenue, atomicità, determinismo, idempotenza e query analitiche.
+- **Evoluzione:** DuckDB è adatto alla soluzione locale ma non offre
+  orchestrazione distribuita; il
+  [piano Databricks](docs/TRASFERIMENTO_DATABRICKS.md) trasferisce il disegno su
+  object storage, Delta Lake, livelli Bronze/Silver/Gold e Lakeflow Jobs.
+
+Esecuzione e verifica minime:
+
+```bash
+python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+cp profiles.yml.example profiles.yml
+python scripts/generate_synthetic_data.py
+python scripts/ingest_raw_data.py init
+python scripts/ingest_raw_data.py load-all
+dbt build --profiles-dir .
+python -m unittest discover -s tests -v
+```
+
 ## Configurazione locale
 
 Creare e attivare l'ambiente virtuale, quindi installare le dipendenze:
@@ -92,3 +132,18 @@ python scripts/ingest_raw_data.py load-batch run_3_late_arriving
 
 Algoritmo di upsert, idempotenza, correction, schema evolution e backfill sono
 descritti in [Gestione incrementale](docs/GESTIONE_INCREMENTALE.md).
+
+## Query analitiche
+
+Dopo avere popolato il database ed eseguito `dbt build --profiles-dir .`, le
+quattro analisi possono essere eseguite direttamente con dbt:
+
+```bash
+dbt show --profiles-dir . --limit 100 --inline "$(cat analyses/revenue_by_category_month.sql)"
+dbt show --profiles-dir . --limit 100 --inline "$(cat analyses/top_10_customers_by_spend.sql)"
+dbt show --profiles-dir . --limit 100 --inline "$(cat analyses/completed_orders_by_region_week.sql)"
+dbt show --profiles-dir . --limit 100 --inline "$(cat analyses/monthly_category_revenue_ranking.sql)"
+```
+
+La migrazione concettuale della soluzione è descritta nel
+[piano di trasferimento verso Databricks](docs/TRASFERIMENTO_DATABRICKS.md).
