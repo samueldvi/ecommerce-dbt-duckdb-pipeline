@@ -130,6 +130,44 @@ class IncrementalPipelineTests(unittest.TestCase):
                 "Full reprocessing changed a dimensional table."
             )
 
+        cls.full_refresh_database_path = (
+            cls.root / "warehouse" / "full-refresh.duckdb"
+        )
+        shutil.copy2(cls.database_path, cls.full_refresh_database_path)
+        full_refresh_profiles = cls.root / "full-refresh-profiles"
+        full_refresh_profiles.mkdir()
+        (full_refresh_profiles / "profiles.yml").write_text(
+            yaml.safe_dump(
+                {
+                    "ecommerce_analytics": {
+                        "target": "dev",
+                        "outputs": {
+                            "dev": {
+                                "type": "duckdb",
+                                "path": str(cls.full_refresh_database_path),
+                                "schema": "analytics",
+                                "threads": 4,
+                            }
+                        },
+                    }
+                },
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+        cls._run_dbt_build(
+            profiles_dir=full_refresh_profiles,
+            target_path=cls.root / "full-refresh-target",
+            log_path=cls.root / "full-refresh-logs",
+            full_refresh=True,
+        )
+        cls.full_refresh_fact_state = cls._fact_state(
+            cls.full_refresh_database_path
+        )
+        cls.full_refresh_dimension_state = cls._dimension_state(
+            cls.full_refresh_database_path
+        )
+
     @classmethod
     def _load_build_and_replay(cls, source_batch: str, label: str) -> None:
         first_result = cls.ingestor.ingest_batch(source_batch)
@@ -154,7 +192,14 @@ class IncrementalPipelineTests(unittest.TestCase):
         cls.replay_results[source_batch] = replay_result
 
     @classmethod
-    def _run_dbt_build(cls) -> None:
+    def _run_dbt_build(
+        cls,
+        *,
+        profiles_dir: Path | None = None,
+        target_path: Path | None = None,
+        log_path: Path | None = None,
+        full_refresh: bool = False,
+    ) -> None:
         environment = os.environ.copy()
         environment["DBT_SEND_ANONYMOUS_USAGE_STATS"] = "false"
         environment["PYTHONDONTWRITEBYTECODE"] = "1"
@@ -164,12 +209,14 @@ class IncrementalPipelineTests(unittest.TestCase):
             "--project-dir",
             str(REPOSITORY_ROOT),
             "--profiles-dir",
-            str(cls.profiles_dir),
+            str(profiles_dir or cls.profiles_dir),
             "--target-path",
-            str(cls.target_path),
+            str(target_path or cls.target_path),
             "--log-path",
-            str(cls.log_path),
+            str(log_path or cls.log_path),
         ]
+        if full_refresh:
+            command.append("--full-refresh")
         result = subprocess.run(
             command,
             cwd=REPOSITORY_ROOT,
@@ -186,8 +233,12 @@ class IncrementalPipelineTests(unittest.TestCase):
             )
 
     @classmethod
-    def _fact_state(cls) -> tuple[tuple[object, ...], ...]:
-        connection = duckdb.connect(str(cls.database_path), read_only=True)
+    def _fact_state(
+        cls, database_path: Path | None = None
+    ) -> tuple[tuple[object, ...], ...]:
+        connection = duckdb.connect(
+            str(database_path or cls.database_path), read_only=True
+        )
         try:
             return tuple(
                 connection.execute(
@@ -243,9 +294,11 @@ class IncrementalPipelineTests(unittest.TestCase):
 
     @classmethod
     def _dimension_state(
-        cls,
+        cls, database_path: Path | None = None
     ) -> tuple[tuple[tuple[object, ...], ...], ...]:
-        connection = duckdb.connect(str(cls.database_path), read_only=True)
+        connection = duckdb.connect(
+            str(database_path or cls.database_path), read_only=True
+        )
         try:
             return tuple(
                 tuple(
@@ -590,6 +643,16 @@ class IncrementalPipelineTests(unittest.TestCase):
         self.assertEqual(
             self.states["after_full_reprocessing"],
             self.states["after_late_arriving"],
+        )
+
+    def test_incremental_result_matches_true_full_refresh(self) -> None:
+        self.assertEqual(
+            self.full_refresh_fact_state,
+            self.states["after_late_arriving"],
+        )
+        self.assertEqual(
+            self.full_refresh_dimension_state,
+            self.dimension_states["after_late_arriving"],
         )
 
 

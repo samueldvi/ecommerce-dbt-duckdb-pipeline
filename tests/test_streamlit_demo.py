@@ -415,6 +415,17 @@ class StreamlitDemoTests(unittest.TestCase):
             with self.assertRaises(duckdb.Error):
                 connection.execute("CREATE TABLE forbidden_write (id INTEGER)")
 
+    def test_missing_database_is_controlled_and_never_created(self) -> None:
+        self.assertFalse(self.database_path.exists())
+        app = self.run_app()
+        self.assertEqual(len(app.exception), 0)
+        self.assertEqual(
+            [element.value for element in app.error],
+            ["La dashboard non è disponibile."],
+        )
+        self.assertFalse(self.database_path.exists())
+        self.assertFalse((self.root / "data/raw").exists())
+
     def test_connection_closes_when_a_query_fails(self) -> None:
         self.database_path.parent.mkdir(parents=True)
         self.database_path.touch()
@@ -500,7 +511,9 @@ class StreamlitDemoTests(unittest.TestCase):
         self.assertTrue(spec["encoding"]["y"]["scale"]["zero"])
         self.assertIn("tooltip", spec["encoding"])
 
-    def test_app_shows_localized_controlled_bootstrap(self) -> None:
+    def test_app_shows_localized_controlled_data_error(self) -> None:
+        self.database_path.parent.mkdir(parents=True)
+        self.database_path.write_text("invalid database", encoding="utf-8")
         app = self.run_app()
         self.assertEqual(len(app.exception), 0)
         self.assertEqual(

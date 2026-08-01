@@ -1,0 +1,49 @@
+%%{init: {
+  "theme": "base",
+  "themeVariables": {
+    "fontFamily": "Inter, Arial, sans-serif",
+    "primaryTextColor": "#172033",
+    "lineColor": "#526079",
+    "clusterBkg": "#FFFFFF",
+    "clusterBorder": "#FFFFFF"
+  },
+  "flowchart": {"curve": "basis", "nodeSpacing": 34, "rankSpacing": 58}
+}}%%
+flowchart TB
+    subgraph ROW1[" "]
+        direction LR
+        SOURCES["<b>1 · Dati sorgente</b><br/>Snapshot customer e product nel Run 1<br/>3 run orders · batch late-arriving"]
+        INGESTION["<b>2 · Ingestion raw</b><br/>Validazione · checksum · transazione ACID<br/>DuckDB raw + manifest idempotente"]
+        TRANSFORM["<b>3 · Trasformazioni dbt</b><br/>Staging · deduplicazione · upsert<br/>order_line_id + prevalenza deterministica"]
+        SOURCES --> INGESTION --> TRANSFORM
+    end
+
+    subgraph ROW2[" "]
+        direction LR
+        MARTS["<b>4 · Star schema e qualità</b><br/>fct_order_lines · dim_customers · dim_products<br/>Unknown · test · incremental = full refresh"]
+        DELIVERY["<b>5 · Snapshot e fruizione</b><br/>ecommerce.duckdb versionato<br/>Streamlit read-only · KPI e analisi"]
+        MARTS --> DELIVERY
+    end
+
+    TRANSFORM -->|"10 insert · 5 correction · replay idempotente"| MARTS
+
+    ORDINARY["5.000 chiavi iniziali<br/>Run 1 · Run 2 · Run 3"] -.-> INGESTION
+    LATE["Late-arriving separato<br/>10 nuove · 5 correction"] -.-> INGESTION
+    EVOLUTION["Schema evolution<br/>sales_channel solo nel Run 3 ordinario"] -.-> TRANSFORM
+    QUALITY["Anomalie conservate<br/>revenue esclusa quando non valida"] -.->|"test dbt"| MARTS
+
+    classDef source fill:#EFF5FF,stroke:#255FCC,color:#172033,stroke-width:1.5px;
+    classDef process fill:#EFFAF3,stroke:#14733D,color:#172033,stroke-width:1.5px;
+    classDef transform fill:#FFF7ED,stroke:#9A4F00,color:#172033,stroke-width:1.5px;
+    classDef mart fill:#F5F1FF,stroke:#7C3AED,color:#172033,stroke-width:1.5px;
+    classDef delivery fill:#FFF0F5,stroke:#A61B4D,color:#172033,stroke-width:1.5px;
+    classDef context fill:#FFFFFF,stroke:#8A94A8,color:#526079,stroke-dasharray:4 3;
+
+    class SOURCES source;
+    class INGESTION process;
+    class TRANSFORM transform;
+    class MARTS,QUALITY mart;
+    class DELIVERY delivery;
+    class ORDINARY,LATE,EVOLUTION context;
+    style ROW1 fill:#FFFFFF,stroke:#FFFFFF
+    style ROW2 fill:#FFFFFF,stroke:#FFFFFF

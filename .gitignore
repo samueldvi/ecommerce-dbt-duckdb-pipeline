@@ -19,6 +19,8 @@ profiles.yml
 *.duckdb
 *.duckdb.wal
 *.duckdb.tmp
+*.wal
+!data/warehouse/ecommerce.duckdb
 
 # Dati raw sintetici riproducibili
 data/raw/**/*.csv
