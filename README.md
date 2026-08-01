@@ -1,10 +1,17 @@
 # E-commerce dbt DuckDB Pipeline
 
+## TL;DR
+
+Pipeline e-commerce riproducibile che integra snapshot anagrafici e ordini incrementali.
+Gestisce replay idempotenti, late-arriving records e correzioni tramite upsert deterministico.
+dbt produce e verifica uno star schema con anomalie osservabili e metriche economiche coerenti.
+I risultati sono consultabili in una dashboard Streamlit read-only.
+
 [![CI](https://github.com/samueldvi/ecommerce-dbt-duckdb-pipeline/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/samueldvi/ecommerce-dbt-duckdb-pipeline/actions/workflows/ci.yml)
 
 Progetto tecnico di Data Engineering per dati e-commerce che trasforma ordini incrementali, correzioni e dati arrivati in ritardo in uno star schema verificato e in una dashboard business interattiva.
 
-[Dashboard](#dashboard-streamlit) · [Architettura](#architettura) · [Esecuzione locale](#esecuzione-locale) · [Documentazione](#documentazione)
+[Apri la demo online](https://ecommerce-dbt-duckdb-pipeline-97sughgocnjpxtwwm6mm7h.streamlit.app/) · [Dashboard](#dashboard-streamlit) · [Architettura](#architettura) · [Esecuzione locale](#esecuzione-locale) · [Documentazione](#documentazione)
 
 ![Dashboard Streamlit in italiano con KPI e analisi delle vendite](docs/images/dashboard-overview-light.png)
 
@@ -280,9 +287,7 @@ streamlit_app.py          entry point della dashboard
 - Lo snapshot DuckDB è una fotografia statica, sintetica e riproducibile della
   pipeline: la dashboard non lo aggiorna e un nuovo stato richiede una
   ricostruzione esplicita.
-- Il deployment Streamlit verificato durante questa revisione richiede accesso
-  oppure non è pubblico; per questo il README non espone un URL non fruibile.
-
 ## Autore
 
-Progetto portfolio mantenuto da [@samueldvi](https://github.com/samueldvi).
+Progetto tecnico di Data Engineering per dati e-commerce mantenuto da
+[@samueldvi](https://github.com/samueldvi).
