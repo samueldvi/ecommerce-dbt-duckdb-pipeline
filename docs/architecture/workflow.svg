@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-labelledby="title description">
+  <title id="title">Workflow della pipeline e-commerce</title>
+  <desc id="description">Dai CSV sintetici allo snapshot DuckDB versionato e alla dashboard Streamlit read-only attraverso ingestion raw, trasformazioni dbt, star schema e test.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M0,0 L12,6 L0,12 Z" fill="#526079"/>
+    </marker>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="4" stdDeviation="5" flood-color="#172033" flood-opacity="0.10"/>
+    </filter>
+    <style>
+      .heading { font: 700 25px Inter, Arial, sans-serif; fill: #172033; }
+      .body { font: 20px Inter, Arial, sans-serif; fill: #354158; }
+      .small { font: 18px Inter, Arial, sans-serif; fill: #526079; }
+      .edge-label { font: 600 17px Inter, Arial, sans-serif; fill: #354158; }
+      .edge { fill: none; stroke: #526079; stroke-width: 2.5; marker-end: url(#arrow); }
+      .context-edge { fill: none; stroke: #8A94A8; stroke-width: 2; stroke-dasharray: 7 6; marker-end: url(#arrow); }
+    </style>
+  </defs>
+
+  <rect width="1600" height="900" fill="#FFFFFF"/>
+
+  <g class="context">
+    <rect x="285" y="48" width="295" height="100" rx="14" fill="#FFFFFF" stroke="#8A94A8" stroke-width="2" stroke-dasharray="7 6"/>
+    <text x="432" y="87" text-anchor="middle" class="body"><tspan x="432">5.000 chiavi iniziali</tspan><tspan x="432" dy="29">Run 1 · Run 2 · Run 3</tspan></text>
+
+    <rect x="650" y="48" width="300" height="100" rx="14" fill="#FFFFFF" stroke="#8A94A8" stroke-width="2" stroke-dasharray="7 6"/>
+    <text x="800" y="87" text-anchor="middle" class="body"><tspan x="800">Late-arriving separato</tspan><tspan x="800" dy="29">10 nuove · 5 correction</tspan></text>
+
+    <rect x="1015" y="48" width="315" height="100" rx="14" fill="#FFFFFF" stroke="#8A94A8" stroke-width="2" stroke-dasharray="7 6"/>
+    <text x="1172" y="80" text-anchor="middle" class="body"><tspan x="1172">Schema evolution</tspan><tspan x="1172" dy="29">sales_channel solo nel</tspan><tspan x="1172" dy="29">Run 3 ordinario</tspan></text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="70" y="245" width="370" height="190" rx="18" fill="#EFF5FF" stroke="#255FCC" stroke-width="3"/>
+    <text x="255" y="294" text-anchor="middle" class="heading">1 · Dati sorgente</text>
+    <text x="255" y="339" text-anchor="middle" class="body"><tspan x="255">Snapshot customer e product</tspan><tspan x="255" dy="32">nel Run 1 · 3 run orders</tspan><tspan x="255" dy="32">batch late-arriving</tspan></text>
+
+    <rect x="615" y="245" width="370" height="190" rx="18" fill="#EFFAF3" stroke="#14733D" stroke-width="3"/>
+    <text x="800" y="294" text-anchor="middle" class="heading">2 · Ingestion raw</text>
+    <text x="800" y="339" text-anchor="middle" class="body"><tspan x="800">Validazione · checksum</tspan><tspan x="800" dy="32">transazione ACID</tspan><tspan x="800" dy="32">DuckDB raw + manifest</tspan></text>
+
+    <rect x="1160" y="245" width="370" height="190" rx="18" fill="#FFF7ED" stroke="#9A4F00" stroke-width="3"/>
+    <text x="1345" y="294" text-anchor="middle" class="heading">3 · Trasformazioni dbt</text>
+    <text x="1345" y="339" text-anchor="middle" class="body"><tspan x="1345">Staging · deduplicazione</tspan><tspan x="1345" dy="32">upsert per order_line_id</tspan><tspan x="1345" dy="32">prevalenza deterministica</tspan></text>
+
+    <rect x="340" y="625" width="500" height="190" rx="18" fill="#F5F1FF" stroke="#7C3AED" stroke-width="3"/>
+    <text x="590" y="674" text-anchor="middle" class="heading">4 · Star schema e qualità</text>
+    <text x="590" y="719" text-anchor="middle" class="body"><tspan x="590">fct_order_lines · dim_customers · dim_products</tspan><tspan x="590" dy="32">Unknown · test dbt</tspan><tspan x="590" dy="32">incremental = full refresh</tspan></text>
+
+    <rect x="940" y="625" width="500" height="190" rx="18" fill="#FFF0F5" stroke="#A61B4D" stroke-width="3"/>
+    <text x="1190" y="674" text-anchor="middle" class="heading">5 · Snapshot e fruizione</text>
+    <text x="1190" y="719" text-anchor="middle" class="body"><tspan x="1190">ecommerce.duckdb versionato</tspan><tspan x="1190" dy="32">Streamlit read-only</tspan><tspan x="1190" dy="32">KPI · trend · ranking · qualità</tspan></text>
+  </g>
+
+  <path class="edge" d="M440 340 H615"/>
+  <path class="edge" d="M985 340 H1160"/>
+  <path class="edge" d="M1345 435 V515 Q1345 555 1305 555 H630 Q590 555 590 595 V625"/>
+  <path class="edge" d="M840 720 H940"/>
+
+  <text x="527" y="321" text-anchor="middle" class="edge-label">6 CSV validati</text>
+  <text x="1072" y="321" text-anchor="middle" class="edge-label">raw + manifest</text>
+  <text x="960" y="535" text-anchor="middle" class="edge-label">10 insert · 5 correction · replay idempotente</text>
+  <text x="890" y="701" text-anchor="middle" class="edge-label">snapshot verificato</text>
+
+  <path class="context-edge" d="M432 148 V210 Q432 225 455 225 H720 Q745 225 745 245"/>
+  <path class="context-edge" d="M800 148 V245"/>
+  <path class="context-edge" d="M1172 148 V210 Q1172 225 1190 225 H1265 Q1285 225 1285 245"/>
+
+  <rect x="55" y="665" width="230" height="110" rx="14" fill="#FFFFFF" stroke="#7C3AED" stroke-width="2" stroke-dasharray="7 6"/>
+  <text x="170" y="697" text-anchor="middle" class="small"><tspan x="170">Anomalie conservate</tspan><tspan x="170" dy="27">revenue esclusa</tspan><tspan x="170" dy="27">quando non valida</tspan></text>
+  <path class="context-edge" d="M285 720 H340"/>
+</svg>

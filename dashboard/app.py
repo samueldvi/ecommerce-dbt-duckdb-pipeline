@@ -34,7 +34,7 @@ from .presentation import (
 )
 from .theme import THEMES, ThemeTokens, theme_css, theme_tokens
 
-BOOTSTRAP_COMMANDS = """python scripts/generate_synthetic_data.py
+SETUP_COMMANDS = """python scripts/generate_synthetic_data.py
 python scripts/ingest_raw_data.py load-all
 dbt build --profiles-dir .
 streamlit run streamlit_app.py"""
@@ -127,7 +127,7 @@ def _render_preferences(translator: Translator) -> None:
         )
 
 
-def _render_bootstrap_error(
+def _render_data_error(
     config: DashboardConfig | None,
     error: Exception,
     translator: Translator,
@@ -140,7 +140,7 @@ def _render_bootstrap_error(
     else:
         st.write(translator("error_missing"))
     st.write(translator("error_action"))
-    st.code(BOOTSTRAP_COMMANDS, language="bash")
+    st.code(SETUP_COMMANDS, language="bash")
     if config is not None:
         with st.expander(translator("project_info")):
             st.write(
@@ -563,7 +563,7 @@ def _render_project_info(config: DashboardConfig, translator: Translator) -> Non
 
 
 def run() -> None:
-    """Render the dashboard or a controlled, localized bootstrap message."""
+    """Render the dashboard or a controlled, localized data error."""
 
     st.set_page_config(
         page_title="E-commerce analytics",
@@ -612,7 +612,7 @@ def run() -> None:
                 filters,
             )
     except (DashboardConfigurationError, DashboardDataError) as error:
-        _render_bootstrap_error(config, error, translator)
+        _render_data_error(config, error, translator)
         return
     except Exception:
         st.error(translator("error_title"))
