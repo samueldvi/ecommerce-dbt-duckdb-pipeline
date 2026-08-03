@@ -844,6 +844,17 @@ class RawIngestor:
                 "The complete raw input must contain 5,010 distinct "
                 "order_line_id values."
             )
+        latest_run_2_updated_at = max(
+            row.typed_values[8] for row in run_2.rows
+        )
+        self._validate_late_insert_timestamps(
+            {
+                str(row.typed_values[0]): row.typed_values
+                for row in late.rows
+            },
+            late_keys - initial_keys,
+            latest_run_2_updated_at,
+        )
         self._validate_corrections(run_1, late, existing_late_keys)
 
     def _validate_corrections(
@@ -921,6 +932,19 @@ class RawIngestor:
                 "and five existing Run 1 correction keys."
             )
 
+        latest_run_2_updated_at = connection.execute(
+            """
+            SELECT max(updated_at)
+            FROM raw.order_lines
+            WHERE source_run = 'run_2'
+            """
+        ).fetchone()[0]
+        self._validate_late_insert_timestamps(
+            candidate_by_key,
+            new_keys,
+            latest_run_2_updated_at,
+        )
+
         correction_originals: dict[str, tuple[object, ...]] = {}
         for key in existing_keys:
             matching_rows = existing_by_key[key]
@@ -941,6 +965,30 @@ class RawIngestor:
                 original,
                 candidate_by_key[key],
                 preserved_indexes,
+            )
+
+    @staticmethod
+    def _validate_late_insert_timestamps(
+        candidate_by_key: dict[str, tuple[object, ...]],
+        new_keys: set[str],
+        latest_run_2_updated_at: object,
+    ) -> None:
+        if not isinstance(latest_run_2_updated_at, datetime):
+            raise SchemaValidationError(
+                "The late-arriving batch requires Run 2 to be loaded first."
+            )
+        # New keys have historical order dates but arrive after Run 2, so their
+        # version timestamps must preserve that logical ingestion sequence.
+        invalid_keys = sorted(
+            key
+            for key in new_keys
+            if candidate_by_key[key][8] <= latest_run_2_updated_at
+        )
+        if invalid_keys:
+            sample = ", ".join(invalid_keys[:5])
+            raise SchemaValidationError(
+                "Late-arriving inserts must have updated_at later than Run 2; "
+                f"invalid keys include {sample}."
             )
 
     @staticmethod

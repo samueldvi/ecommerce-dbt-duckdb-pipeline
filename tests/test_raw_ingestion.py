@@ -807,6 +807,45 @@ class RawIngestionTests(unittest.TestCase):
 
         self.assertEqual(raw_counts(self.database_path), (204, 80, 5_000, 5))
 
+    def test_complete_ingestion_rejects_late_insert_before_run_2_cutoff(
+        self,
+    ) -> None:
+        source = self.input_root / "run_3/late_arriving/orders.csv"
+        columns, rows = read_csv(source)
+        run_2_rows = read_csv(self.input_root / "run_2/orders.csv")[1]
+        rows[0]["updated_at"] = max(
+            row["updated_at"] for row in run_2_rows
+        )
+        write_csv(source, columns, rows)
+
+        with self.assertRaisesRegex(
+            SchemaValidationError, "updated_at later than Run 2"
+        ):
+            self.ingestor.ingest_dataset()
+
+        self.assertFalse(self.database_path.exists())
+
+    def test_late_batch_rejects_late_insert_before_run_2_cutoff_atomically(
+        self,
+    ) -> None:
+        self.ingestor.ingest_batch("run_1")
+        self.ingestor.ingest_batch("run_2")
+        self.ingestor.ingest_batch("run_3")
+        source = self.input_root / "run_3/late_arriving/orders.csv"
+        columns, rows = read_csv(source)
+        run_2_rows = read_csv(self.input_root / "run_2/orders.csv")[1]
+        rows[0]["updated_at"] = max(
+            row["updated_at"] for row in run_2_rows
+        )
+        write_csv(source, columns, rows)
+
+        with self.assertRaisesRegex(
+            SchemaValidationError, "updated_at later than Run 2"
+        ):
+            self.ingestor.ingest_batch("run_3_late_arriving")
+
+        self.assertEqual(raw_counts(self.database_path), (204, 80, 5_000, 5))
+
     def test_changed_source_path_conflicts_without_partial_changes(self) -> None:
         source = Path("run_1/products.csv")
         self.ingestor.ingest_file(source)
