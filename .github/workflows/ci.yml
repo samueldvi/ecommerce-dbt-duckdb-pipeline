@@ -154,3 +154,24 @@ jobs:
         uses: gitleaks/gitleaks-action@v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  tests:
+    name: tests
+    if: ${{ always() }}
+    needs:
+      - python-tests
+      - dbt-validation
+      - security
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Verify all required checks passed
+        env:
+          PYTHON_TESTS_RESULT: ${{ needs.python-tests.result }}
+          DBT_VALIDATION_RESULT: ${{ needs.dbt-validation.result }}
+          SECURITY_RESULT: ${{ needs.security.result }}
+        run: |
+          test "$PYTHON_TESTS_RESULT" = "success"
+          test "$DBT_VALIDATION_RESULT" = "success"
+          test "$SECURITY_RESULT" = "success"
