@@ -18,6 +18,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import yaml
+from filelock import FileLock, Timeout
 
 import scripts.synthetic_data.generator as generator_module
 from scripts.synthetic_data.generator import (
@@ -30,9 +31,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 CLI_PATH = REPOSITORY_ROOT / "scripts" / "generate_synthetic_data.py"
 DEFAULT_OUTPUT_DIR = REPOSITORY_ROOT / "data" / "raw"
 CONTRACT_METRICS = yaml.safe_load(
-    (REPOSITORY_ROOT / "docs/expected_run_metrics.yml").read_text(
-        encoding="utf-8"
-    )
+    (REPOSITORY_ROOT / "docs/expected_run_metrics.yml").read_text(encoding="utf-8")
 )
 
 DEFAULT_SEED = 20250730
@@ -82,9 +81,7 @@ EXPECTED_CORRECTION_KEYS = {
     "OL_00003000",
 }
 DECIMAL_PATTERN = re.compile(r"-?\d{1,10}\.\d{2}")
-TIMESTAMP_PATTERN = re.compile(
-    r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z"
-)
+TIMESTAMP_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z")
 
 ORDER_LINE_METRICS = CONTRACT_METRICS["order_lines"]
 RUN_METRICS = ORDER_LINE_METRICS["runs"]
@@ -96,22 +93,16 @@ LATE_METRICS = RUN_METRICS["run_3"]["late_arriving"]
 LATE_COUNT = LATE_METRICS["input_rows"]["exact"]
 LATE_INSERTS = LATE_METRICS["inserts"]["exact"]
 LATE_CORRECTIONS = LATE_METRICS["corrections"]["exact"]
-FINAL_DISTINCT = CONTRACT_METRICS["order_lines"]["final"]["distinct_keys"][
+FINAL_DISTINCT = CONTRACT_METRICS["order_lines"]["final"]["distinct_keys"]["exact"]
+CUSTOMER_DISTINCT = CONTRACT_METRICS["master_data"]["customers"]["distinct_keys"][
     "exact"
 ]
-CUSTOMER_DISTINCT = CONTRACT_METRICS["master_data"]["customers"][
-    "distinct_keys"
-]["exact"]
-PRODUCT_DISTINCT = CONTRACT_METRICS["master_data"]["products"][
-    "distinct_keys"
-]["exact"]
+PRODUCT_DISTINCT = CONTRACT_METRICS["master_data"]["products"]["distinct_keys"]["exact"]
 VERSIONED_CUSTOMER_RANGE = CONTRACT_METRICS["master_data"]["customers"][
     "keys_with_multiple_versions"
 ]
 MIN_MULTI_LINE_RATIO = Decimal(
-    str(
-        CONTRACT_METRICS["invariants"]["multi_line_orders"]["ratio"]["min"]
-    )
+    str(CONTRACT_METRICS["invariants"]["multi_line_orders"]["ratio"]["min"])
 )
 
 
@@ -123,9 +114,7 @@ def read_csv(path: Path) -> tuple[tuple[str, ...], list[dict[str, str]]]:
 
 def file_hashes(root: Path) -> dict[Path, str]:
     return {
-        relative_path: hashlib.sha256(
-            (root / relative_path).read_bytes()
-        ).hexdigest()
+        relative_path: hashlib.sha256((root / relative_path).read_bytes()).hexdigest()
         for relative_path in EXPECTED_FILES
     }
 
@@ -166,34 +155,21 @@ def apply_run(
 
 def quality_keys(rows: list[dict[str, str]]) -> dict[str, set[str]]:
     customer_keys = {
-        row["customer_id"]
-        for row in SyntheticDataGeneratorTests.customers
+        row["customer_id"] for row in SyntheticDataGeneratorTests.customers
     }
-    product_keys = {
-        row["product_id"]
-        for row in SyntheticDataGeneratorTests.products
-    }
+    product_keys = {row["product_id"] for row in SyntheticDataGeneratorTests.products}
     return {
         "cancelled": {
-            row["order_line_id"]
-            for row in rows
-            if row["order_status"] == "cancelled"
+            row["order_line_id"] for row in rows if row["order_status"] == "cancelled"
         },
-        "null_price": {
-            row["order_line_id"]
-            for row in rows
-            if row["unit_price"] == ""
-        },
+        "null_price": {row["order_line_id"] for row in rows if row["unit_price"] == ""},
         "negative_price": {
             row["order_line_id"]
             for row in rows
-            if row["unit_price"]
-            and Decimal(row["unit_price"]) < Decimal("0.00")
+            if row["unit_price"] and Decimal(row["unit_price"]) < Decimal("0.00")
         },
         "zero_price": {
-            row["order_line_id"]
-            for row in rows
-            if row["unit_price"] == "0.00"
+            row["order_line_id"] for row in rows if row["unit_price"] == "0.00"
         },
         "invalid_status": {
             row["order_line_id"]
@@ -261,32 +237,19 @@ def run_generation_after_lock_probe(
     result_queue: object,
 ) -> None:
     try:
-        if generator_module.fcntl is None:
-            raise RuntimeError(
-                "fcntl is unavailable in the contender process"
-            )
-        real_flock = generator_module.fcntl.flock
-
-        def probe_then_acquire_lock(
-            descriptor: int, operation: int
-        ) -> None:
-            try:
-                real_flock(
-                    descriptor,
-                    operation | generator_module.fcntl.LOCK_NB,
-                )
-            except BlockingIOError:
-                lock_probe_results.put("blocked")
-                real_flock(descriptor, operation)
-            else:
-                lock_probe_results.put("acquired")
-
-        with patch.object(
-            generator_module.fcntl,
-            "flock",
-            side_effect=probe_then_acquire_lock,
-        ):
-            generate_dataset(Path(output_root), seed=seed, force=True)
+        destination = Path(output_root)
+        probe = FileLock(
+            generator_module._output_lock_path(destination),
+            timeout=0,
+        )
+        try:
+            probe.acquire()
+        except Timeout:
+            lock_probe_results.put("blocked")
+        else:
+            lock_probe_results.put("acquired")
+            probe.release()
+        generate_dataset(destination, seed=seed, force=True)
     except Exception:
         result_queue.put(("error", traceback.format_exc()))
     else:
@@ -348,9 +311,7 @@ def drain_worker_messages(
 def raise_for_worker_failures(workers: list[WorkerRecord]) -> None:
     for label, process, result_queue, messages in workers:
         drain_worker_messages(result_queue, messages)
-        failures = [
-            payload for status, payload in messages if status == "error"
-        ]
+        failures = [payload for status, payload in messages if status == "error"]
         if failures:
             raise AssertionError(
                 f"{label} worker failed:\n" + "\n".join(map(str, failures))
@@ -361,9 +322,7 @@ def raise_for_worker_failures(workers: list[WorkerRecord]) -> None:
                 messages,
                 wait_timeout=1.0,
             )
-            failures = [
-                payload for status, payload in messages if status == "error"
-            ]
+            failures = [payload for status, payload in messages if status == "error"]
             detail = (
                 "\n".join(map(str, failures))
                 if failures
@@ -421,9 +380,7 @@ def wait_for_control_message(
                 f"{label} exitcode={process.exitcode}, messages={messages!r}"
                 for label, process, _, messages in workers
             )
-            raise AssertionError(
-                f"Timed out waiting for {description}; {states}"
-            )
+            raise AssertionError(f"Timed out waiting for {description}; {states}")
         try:
             return control_queue.get(timeout=min(0.1, remaining))
         except queue.Empty:
@@ -444,9 +401,7 @@ def wait_for_workers(
                 f"{label} exitcode={process.exitcode}"
                 for label, process, _, _ in workers
             )
-            raise AssertionError(
-                f"Timed out waiting for workers to finish; {states}"
-            )
+            raise AssertionError(f"Timed out waiting for workers to finish; {states}")
         for _, process, _, _ in workers:
             process.join(timeout=min(0.1, remaining))
 
@@ -519,19 +474,13 @@ class SyntheticDataGeneratorTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls._default_output_state = {
             path: path.read_bytes() if path.is_file() else None
-            for path in (
-                DEFAULT_OUTPUT_DIR / relative for relative in EXPECTED_FILES
-            )
+            for path in (DEFAULT_OUTPUT_DIR / relative for relative in EXPECTED_FILES)
         }
         cls._temporary_directory = tempfile.TemporaryDirectory()
         cls.output_root = Path(cls._temporary_directory.name) / "generated"
         cls.summary = generate_dataset(cls.output_root)
-        cls.customers = read_csv(
-            cls.output_root / "run_1/customers.csv"
-        )[1]
-        cls.products = read_csv(
-            cls.output_root / "run_1/products.csv"
-        )[1]
+        cls.customers = read_csv(cls.output_root / "run_1/customers.csv")[1]
+        cls.products = read_csv(cls.output_root / "run_1/products.csv")[1]
         cls.run_1 = read_csv(cls.output_root / "run_1/orders.csv")[1]
         cls.run_2 = read_csv(cls.output_root / "run_2/orders.csv")[1]
         cls.run_3 = read_csv(cls.output_root / "run_3/orders.csv")[1]
@@ -581,9 +530,7 @@ class SyntheticDataGeneratorTests(unittest.TestCase):
         run_1_keys = {row["order_line_id"] for row in self.run_1}
         run_2_keys = {row["order_line_id"] for row in self.run_2}
         run_3_keys = {row["order_line_id"] for row in self.run_3}
-        late_keys = {
-            row["order_line_id"] for row in self.late_arriving
-        }
+        late_keys = {row["order_line_id"] for row in self.late_arriving}
         self.assertEqual(len(run_1_keys), RUN_1_COUNT)
         self.assertEqual(len(run_2_keys), RUN_2_COUNT)
         self.assertEqual(len(run_3_keys), RUN_3_COUNT)
@@ -603,9 +550,7 @@ class SyntheticDataGeneratorTests(unittest.TestCase):
         run_2_keys = {row["order_line_id"] for row in self.run_2}
         run_3_keys = {row["order_line_id"] for row in self.run_3}
         corrections = [
-            row
-            for row in self.late_arriving
-            if row["order_line_id"] in originals
+            row for row in self.late_arriving if row["order_line_id"] in originals
         ]
         self.assertEqual(
             {row["order_line_id"] for row in corrections},
@@ -628,12 +573,8 @@ class SyntheticDataGeneratorTests(unittest.TestCase):
                 parse_timestamp(correction["updated_at"]),
                 parse_timestamp(original["updated_at"]),
             )
-            quantity_changed = (
-                correction["quantity"] != original["quantity"]
-            )
-            price_changed = (
-                correction["unit_price"] != original["unit_price"]
-            )
+            quantity_changed = correction["quantity"] != original["quantity"]
+            price_changed = correction["unit_price"] != original["unit_price"]
             self.assertNotEqual(quantity_changed, price_changed)
             for column in unchanged_columns:
                 self.assertEqual(correction[column], original[column])
@@ -667,9 +608,7 @@ class SyntheticDataGeneratorTests(unittest.TestCase):
             if count == 1:
                 continue
             versions = [
-                row
-                for row in self.customers
-                if row["customer_id"] == customer_id
+                row for row in self.customers if row["customer_id"] == customer_id
             ]
             current = max(
                 versions,
@@ -705,11 +644,7 @@ class SyntheticDataGeneratorTests(unittest.TestCase):
     def test_current_customer_name_does_not_require_updated_marker(self) -> None:
         generated = generator_module._build_generated_files(12)
         customer_rows = generated[Path("run_1/customers.csv")]
-        versions = [
-            row
-            for row in customer_rows
-            if row["customer_id"] == "CUS_000001"
-        ]
+        versions = [row for row in customer_rows if row["customer_id"] == "CUS_000001"]
         current = max(versions, key=lambda row: parse_timestamp(row["updated_at"]))
         current["customer_name"] = "Synthetic Current Customer"
 
@@ -725,19 +660,12 @@ class SyntheticDataGeneratorTests(unittest.TestCase):
             self.assertNotIn(b"\r", content)
             self.assertTrue(content.endswith(b"\n"))
 
-        order_rows = (
-            self.run_1
-            + self.run_2
-            + self.run_3
-            + self.late_arriving
-        )
+        order_rows = self.run_1 + self.run_2 + self.run_3 + self.late_arriving
         for row in order_rows:
             if row["unit_price"]:
                 self.assertRegex(row["unit_price"], DECIMAL_PATTERN)
                 self.assertNotIn("e", row["unit_price"].lower())
-                self.assertEqual(
-                    Decimal(row["unit_price"]).as_tuple().exponent, -2
-                )
+                self.assertEqual(Decimal(row["unit_price"]).as_tuple().exponent, -2)
             self.assertRegex(row["updated_at"], TIMESTAMP_PATTERN)
             parse_timestamp(row["updated_at"])
         for row in self.customers:
@@ -745,18 +673,10 @@ class SyntheticDataGeneratorTests(unittest.TestCase):
             parse_timestamp(row["updated_at"])
 
     def test_run_date_ranges_and_late_arrival_timestamps(self) -> None:
-        run_1_min = date.fromisoformat(
-            RUN_METRICS["run_1"]["order_date"]["min"]
-        )
-        run_1_max = date.fromisoformat(
-            RUN_METRICS["run_1"]["order_date"]["max"]
-        )
-        run_2_min = date.fromisoformat(
-            RUN_METRICS["run_2"]["order_date"]["min"]
-        )
-        run_2_max = date.fromisoformat(
-            RUN_METRICS["run_2"]["order_date"]["max"]
-        )
+        run_1_min = date.fromisoformat(RUN_METRICS["run_1"]["order_date"]["min"])
+        run_1_max = date.fromisoformat(RUN_METRICS["run_1"]["order_date"]["max"])
+        run_2_min = date.fromisoformat(RUN_METRICS["run_2"]["order_date"]["min"])
+        run_2_max = date.fromisoformat(RUN_METRICS["run_2"]["order_date"]["max"])
         run_3_min = date.fromisoformat(
             RUN_METRICS["run_3"]["initial_order_date"]["min"]
         )
@@ -788,14 +708,10 @@ class SyntheticDataGeneratorTests(unittest.TestCase):
         ):
             self.assertEqual(
                 {date.fromisoformat(row["order_date"]) for row in rows},
-                {
-                    minimum_date + timedelta(days=offset)
-                    for offset in range(10)
-                },
+                {minimum_date + timedelta(days=offset) for offset in range(10)},
             )
         initial_keys = {
-            row["order_line_id"]
-            for row in (*self.run_1, *self.run_2, *self.run_3)
+            row["order_line_id"] for row in (*self.run_1, *self.run_2, *self.run_3)
         }
         late_inserts = [
             row
@@ -807,25 +723,16 @@ class SyntheticDataGeneratorTests(unittest.TestCase):
         )
         self.assertEqual(len(late_inserts), LATE_INSERTS)
         for row in late_inserts:
-            self.assertGreater(
-                parse_timestamp(row["updated_at"]), latest_run_2_update
-            )
-            self.assertGreaterEqual(
-                date.fromisoformat(row["order_date"]), run_1_min
-            )
-            self.assertLessEqual(
-                date.fromisoformat(row["order_date"]), run_1_max
-            )
+            self.assertGreater(parse_timestamp(row["updated_at"]), latest_run_2_update)
+            self.assertGreaterEqual(date.fromisoformat(row["order_date"]), run_1_min)
+            self.assertLessEqual(date.fromisoformat(row["order_date"]), run_1_max)
             self.assertNotIn("sales_channel", row)
 
     def test_quality_scenarios_are_separate_in_each_initial_run(self) -> None:
         initial_rows = self.run_1 + self.run_2 + self.run_3
         aggregate_scenarios = quality_keys(initial_rows)
         self.assertEqual(
-            {
-                scenario: len(keys)
-                for scenario, keys in aggregate_scenarios.items()
-            },
+            {scenario: len(keys) for scenario, keys in aggregate_scenarios.items()},
             {
                 "cancelled": 5,
                 "null_price": 5,
@@ -836,11 +743,7 @@ class SyntheticDataGeneratorTests(unittest.TestCase):
                 "orphan_product": 5,
             },
         )
-        aggregate_keys = [
-            key
-            for keys in aggregate_scenarios.values()
-            for key in keys
-        ]
+        aggregate_keys = [key for keys in aggregate_scenarios.values() for key in keys]
         self.assertEqual(
             len(aggregate_keys),
             len(set(aggregate_keys)),
@@ -849,16 +752,12 @@ class SyntheticDataGeneratorTests(unittest.TestCase):
         for rows in (self.run_1, self.run_2, self.run_3):
             scenarios = quality_keys(rows)
             self.assertTrue(all(scenarios.values()))
-            all_keys = [
-                key for keys in scenarios.values() for key in keys
-            ]
+            all_keys = [key for keys in scenarios.values() for key in keys]
             self.assertEqual(len(all_keys), len(set(all_keys)))
 
     def test_zero_price_is_retained_and_not_economically_invalid(self) -> None:
         initial_rows = self.run_1 + self.run_2 + self.run_3
-        zero_price_rows = [
-            row for row in initial_rows if row["unit_price"] == "0.00"
-        ]
+        zero_price_rows = [row for row in initial_rows if row["unit_price"] == "0.00"]
         self.assertTrue(zero_price_rows)
         self.assertTrue(
             all(
@@ -868,30 +767,19 @@ class SyntheticDataGeneratorTests(unittest.TestCase):
                 for row in zero_price_rows
             )
         )
-        self.assertTrue(
-            generator_module._is_economically_invalid_unit_price("")
-        )
-        self.assertTrue(
-            generator_module._is_economically_invalid_unit_price("-1.00")
-        )
+        self.assertTrue(generator_module._is_economically_invalid_unit_price(""))
+        self.assertTrue(generator_module._is_economically_invalid_unit_price("-1.00"))
 
     def test_initial_multi_line_order_ratio_uses_distinct_order_ids(self) -> None:
         initial_rows = self.run_1 + self.run_2 + self.run_3
         order_lines_by_order = {
-            order_id: {
-                row["order_line_id"] for row in order_rows
-            }
-            for order_id, order_rows in group_rows_by_order(
-                initial_rows
-            ).items()
+            order_id: {row["order_line_id"] for row in order_rows}
+            for order_id, order_rows in group_rows_by_order(initial_rows).items()
         }
         multi_line_orders = sum(
-            len(order_line_ids) >= 2
-            for order_line_ids in order_lines_by_order.values()
+            len(order_line_ids) >= 2 for order_line_ids in order_lines_by_order.values()
         )
-        ratio = Decimal(multi_line_orders) / Decimal(
-            len(order_lines_by_order)
-        )
+        ratio = Decimal(multi_line_orders) / Decimal(len(order_lines_by_order))
         self.assertEqual(len(initial_rows), INITIAL_COUNT)
         self.assertTrue(
             any(
@@ -926,24 +814,13 @@ class SyntheticDataGeneratorTests(unittest.TestCase):
                         )
                     if include_sales_channel:
                         self.assertEqual(
-                            len(
-                                {
-                                    row["sales_channel"]
-                                    for row in order_rows
-                                }
-                            ),
+                            len({row["sales_channel"] for row in order_rows}),
                             1,
-                            (
-                                f"{label} {order_id} has inconsistent "
-                                "sales_channel"
-                            ),
+                            (f"{label} {order_id} has inconsistent sales_channel"),
                         )
                     else:
                         self.assertTrue(
-                            all(
-                                "sales_channel" not in row
-                                for row in order_rows
-                            )
+                            all("sales_channel" not in row for row in order_rows)
                         )
 
         all_initial_rows = self.run_1 + self.run_2 + self.run_3
@@ -967,21 +844,10 @@ class SyntheticDataGeneratorTests(unittest.TestCase):
                 )
 
     def test_sales_channel_schema_evolves_only_on_ordinary_run_3(self) -> None:
-        self.assertTrue(
-            all("sales_channel" not in row for row in self.run_1)
-        )
-        self.assertTrue(
-            all("sales_channel" not in row for row in self.run_2)
-        )
-        self.assertTrue(
-            all(
-                "sales_channel" not in row
-                for row in self.late_arriving
-            )
-        )
-        self.assertTrue(
-            all("sales_channel" in row for row in self.run_3)
-        )
+        self.assertTrue(all("sales_channel" not in row for row in self.run_1))
+        self.assertTrue(all("sales_channel" not in row for row in self.run_2))
+        self.assertTrue(all("sales_channel" not in row for row in self.late_arriving))
+        self.assertTrue(all("sales_channel" in row for row in self.run_3))
         self.assertTrue(
             all(
                 not row["sales_channel"]
@@ -1002,16 +868,10 @@ class SyntheticDataGeneratorTests(unittest.TestCase):
             PRODUCT_DISTINCT,
         )
         self.assertTrue(
-            all(
-                row["email"].endswith("@example.test")
-                for row in self.customers
-            )
+            all(row["email"].endswith("@example.test") for row in self.customers)
         )
         self.assertTrue(
-            all(
-                row["product_name"].startswith("Synthetic ")
-                for row in self.products
-            )
+            all(row["product_name"].startswith("Synthetic ") for row in self.products)
         )
 
     def test_same_seed_is_byte_identical(self) -> None:
@@ -1021,9 +881,7 @@ class SyntheticDataGeneratorTests(unittest.TestCase):
                 second_root = Path(second_directory) / "output"
                 generate_dataset(first_root, seed=77)
                 generate_dataset(second_root, seed=77)
-                self.assertEqual(
-                    file_hashes(first_root), file_hashes(second_root)
-                )
+                self.assertEqual(file_hashes(first_root), file_hashes(second_root))
 
     def test_different_seed_changes_all_files_without_contract_drift(self) -> None:
         with tempfile.TemporaryDirectory() as first_directory:
@@ -1041,12 +899,8 @@ class SyntheticDataGeneratorTests(unittest.TestCase):
                     )
                 )
                 for relative_path, expected_schema in EXPECTED_SCHEMAS.items():
-                    first_schema, first_rows = read_csv(
-                        first_root / relative_path
-                    )
-                    second_schema, second_rows = read_csv(
-                        second_root / relative_path
-                    )
+                    first_schema, first_rows = read_csv(first_root / relative_path)
+                    second_schema, second_rows = read_csv(second_root / relative_path)
                     self.assertEqual(first_schema, expected_schema)
                     self.assertEqual(second_schema, expected_schema)
                     self.assertEqual(len(first_rows), len(second_rows))
@@ -1067,9 +921,7 @@ class SyntheticDataGeneratorTests(unittest.TestCase):
 
             generate_dataset(output_root, seed=78, force=True)
             after = file_hashes(output_root)
-            self.assertTrue(
-                all(before[path] != after[path] for path in EXPECTED_FILES)
-            )
+            self.assertTrue(all(before[path] != after[path] for path in EXPECTED_FILES))
             self.assertEqual(
                 foreign_root_file.read_text(encoding="utf-8"),
                 "preserve root",
@@ -1082,7 +934,7 @@ class SyntheticDataGeneratorTests(unittest.TestCase):
     def test_concurrent_force_publications_are_serialized_per_output_root(
         self,
     ) -> None:
-        context = multiprocessing.get_context("fork")
+        context = multiprocessing.get_context("spawn")
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
             output_root = base / "shared"
@@ -1189,13 +1041,9 @@ class SyntheticDataGeneratorTests(unittest.TestCase):
                 primary_failure = traceback.format_exc()
             finally:
                 resume_publication.set()
-                cleanup_errors.extend(
-                    stop_started_processes(started_processes)
-                )
+                cleanup_errors.extend(stop_started_processes(started_processes))
                 worker_errors.extend(worker_failure_details(workers))
-                cleanup_errors.extend(
-                    close_process_resources(processes, queues)
-                )
+                cleanup_errors.extend(close_process_resources(processes, queues))
 
             failures = [
                 detail
@@ -1210,7 +1058,7 @@ class SyntheticDataGeneratorTests(unittest.TestCase):
                 self.fail("\n\n".join(failures))
 
     def test_different_output_roots_do_not_share_a_lock(self) -> None:
-        context = multiprocessing.get_context("fork")
+        context = multiprocessing.get_context("spawn")
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
             paused_root = base / "paused"
@@ -1272,9 +1120,7 @@ class SyntheticDataGeneratorTests(unittest.TestCase):
                 )
 
                 independent_process.start()
-                started_processes.append(
-                    ("independent root", independent_process)
-                )
+                started_processes.append(("independent root", independent_process))
                 wait_for_workers([workers[1]])
                 raise_for_worker_failures(workers)
 
@@ -1297,13 +1143,9 @@ class SyntheticDataGeneratorTests(unittest.TestCase):
                 primary_failure = traceback.format_exc()
             finally:
                 resume_publication.set()
-                cleanup_errors.extend(
-                    stop_started_processes(started_processes)
-                )
+                cleanup_errors.extend(stop_started_processes(started_processes))
                 worker_errors.extend(worker_failure_details(workers))
-                cleanup_errors.extend(
-                    close_process_resources(processes, queues)
-                )
+                cleanup_errors.extend(close_process_resources(processes, queues))
 
             failures = [
                 detail
@@ -1318,7 +1160,7 @@ class SyntheticDataGeneratorTests(unittest.TestCase):
                 self.fail("\n\n".join(failures))
 
     def test_output_lock_is_released_when_holder_process_terminates(self) -> None:
-        context = multiprocessing.get_context("fork")
+        context = multiprocessing.get_context("spawn")
         with tempfile.TemporaryDirectory() as directory:
             output_root = Path(directory) / "output"
             lock_acquired = context.Event()
@@ -1345,13 +1187,47 @@ class SyntheticDataGeneratorTests(unittest.TestCase):
             )
             self.assertEqual(list(output_root.glob(".synthetic-data-*")), [])
 
-    def test_missing_fcntl_fails_without_publishing(self) -> None:
+    def test_output_lock_is_reusable_after_release_and_exception(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             output_root = Path(directory) / "output"
-            with patch.object(generator_module, "fcntl", None):
+            lock_path = generator_module._output_lock_path(output_root)
+
+            with generator_module._exclusive_output_lock(output_root):
+                self.assertTrue(lock_path.is_file())
+                with self.assertRaises(Timeout):
+                    FileLock(lock_path, timeout=0).acquire()
+
+            released_lock = FileLock(lock_path, timeout=0)
+            released_lock.acquire()
+            released_lock.release()
+
+            with self.assertRaisesRegex(RuntimeError, "injected failure"):
+                with generator_module._exclusive_output_lock(output_root):
+                    raise RuntimeError("injected failure")
+
+            released_after_error = FileLock(lock_path, timeout=0)
+            released_after_error.acquire()
+            released_after_error.release()
+            self.assertFalse(lock_path.is_relative_to(output_root))
+
+    def test_generator_has_no_direct_unix_lock_dependency(self) -> None:
+        source = Path(generator_module.__file__).read_text(encoding="utf-8")
+        self.assertNotRegex(source, r"(?m)^\s*(?:from|import)\s+fcntl\b")
+        self.assertFalse(hasattr(generator_module, "fcntl"))
+
+    def test_lock_acquisition_failure_is_controlled_without_publishing(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output_root = Path(directory) / "output"
+            with patch.object(
+                generator_module.FileLock,
+                "acquire",
+                side_effect=OSError("simulated lock failure"),
+            ):
                 with self.assertRaisesRegex(
                     GenerationError,
-                    "Concurrent output protection is unavailable",
+                    "Unable to acquire output lock",
                 ):
                     generate_dataset(output_root, seed=73)
 
@@ -1419,9 +1295,7 @@ class SyntheticDataGeneratorTests(unittest.TestCase):
                     generate_dataset(output_root, seed=78)
 
             self.assertEqual(list(output_root.rglob("*.csv")), [])
-            self.assertEqual(
-                foreign_file.read_text(encoding="utf-8"), "preserve"
-            )
+            self.assertEqual(foreign_file.read_text(encoding="utf-8"), "preserve")
             self.assertEqual(list(output_root.glob(".synthetic-data-*")), [])
 
     def test_rollback_failure_reports_and_retains_recovery_data(self) -> None:
@@ -1432,9 +1306,7 @@ class SyntheticDataGeneratorTests(unittest.TestCase):
             promotion_calls = 0
             rollback_failed = False
 
-            def fail_publication_and_rollback(
-                source: object, target: object
-            ) -> None:
+            def fail_publication_and_rollback(source: object, target: object) -> None:
                 nonlocal promotion_calls, rollback_failed
                 source_path = Path(source)
                 if "staged" in source_path.parts:
@@ -1462,21 +1334,12 @@ class SyntheticDataGeneratorTests(unittest.TestCase):
             recovery_path = Path(recovery_match.group(1))
             self.assertTrue(recovery_path.is_dir())
             self.assertEqual(recovery_path.parent, output_root.resolve())
+            self.assertTrue(recovery_path.name.startswith(".synthetic-data-"))
             self.assertTrue(
-                recovery_path.name.startswith(".synthetic-data-")
+                (recovery_path / "backup/run_3/late_arriving/orders.csv").is_file()
             )
-            self.assertTrue(
-                (
-                    recovery_path
-                    / "backup/run_3/late_arriving/orders.csv"
-                ).is_file()
-            )
-            self.assertTrue(
-                (recovery_path / "staged/run_1/products.csv").is_file()
-            )
-            transaction_directories = list(
-                output_root.glob(".synthetic-data-*")
-            )
+            self.assertTrue((recovery_path / "staged/run_1/products.csv").is_file())
+            transaction_directories = list(output_root.glob(".synthetic-data-*"))
             self.assertEqual(len(transaction_directories), 1)
             self.assertTrue(transaction_directories[0].samefile(recovery_path))
 
@@ -1542,9 +1405,7 @@ class SyntheticDataGeneratorTests(unittest.TestCase):
             with self.subTest(unit_price=invalid_value):
                 generated = generator_module._build_generated_files(12)
                 generated[order_path][20]["unit_price"] = invalid_value
-                with self.assertRaisesRegex(
-                    GenerationError, "DECIMAL\\(12,2\\)"
-                ):
+                with self.assertRaisesRegex(GenerationError, "DECIMAL\\(12,2\\)"):
                     generator_module._validate_generated_data(generated)
 
     def test_validation_rejects_temporal_and_correction_drift(self) -> None:
@@ -1569,17 +1430,13 @@ class SyntheticDataGeneratorTests(unittest.TestCase):
             generator_module._validate_generated_data(generated)
 
         generated = generator_module._build_generated_files(12)
-        generated[late_path][0][
-            "updated_at"
-        ] = "2025-01-20T00:00:00.000000Z"
+        generated[late_path][0]["updated_at"] = "2025-01-20T00:00:00.000000Z"
         with self.assertRaisesRegex(GenerationError, "later than Run 2"):
             generator_module._validate_generated_data(generated)
 
         generated = generator_module._build_generated_files(12)
         generated[late_path][-1]["order_id"] = "ORD_CHANGED"
-        with self.assertRaisesRegex(
-            GenerationError, "unexpectedly changes order_id"
-        ):
+        with self.assertRaisesRegex(GenerationError, "unexpectedly changes order_id"):
             generator_module._validate_generated_data(generated)
 
     def test_cli_help_generation_and_existing_output_error(self) -> None:
@@ -1614,10 +1471,7 @@ class SyntheticDataGeneratorTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("seed 123", result.stdout)
             self.assertEqual(
-                {
-                    path.relative_to(output_root)
-                    for path in output_root.rglob("*.csv")
-                },
+                {path.relative_to(output_root) for path in output_root.rglob("*.csv")},
                 set(EXPECTED_FILES),
             )
             second_result = subprocess.run(

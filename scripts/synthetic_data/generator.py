@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import os
 import random
 import re
@@ -15,10 +16,7 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
 
-try:
-    import fcntl
-except ImportError:  # pragma: no cover - guarded for non-POSIX environments
-    fcntl = None  # type: ignore[assignment]
+from filelock import FileLock, Timeout
 
 DEFAULT_SEED = 20250730
 CUSTOMER_COUNT = 200
@@ -87,13 +85,13 @@ _COUNTRY_CODES = ("DE", "ES", "FR", "IT", "NL", "PT")
 _PRODUCT_CATEGORIES = ("Accessories", "Audio", "Computing", "Home", "Mobile")
 _PRODUCT_TYPES = ("Adapter", "Headset", "Keyboard", "Monitor", "Speaker")
 _DATE_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}")
-_TIMESTAMP_PATTERN = re.compile(
-    r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z"
-)
+_TIMESTAMP_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z")
 _DECIMAL_PATTERN = re.compile(r"-?\d{1,10}\.\d{2}")
 _INTEGER_PATTERN = re.compile(r"-?(?:0|[1-9]\d*)")
 _COUNTRY_CODE_PATTERN = re.compile(r"[A-Z]{2}")
 _TRANSACTION_PREFIX = ".synthetic-data-"
+_LOCK_DIRECTORY_NAME = "ecommerce-dbt-duckdb-pipeline-locks"
+_LOCK_TIMEOUT_SECONDS = 120
 
 
 class GenerationError(RuntimeError):
@@ -134,8 +132,7 @@ def generate_dataset(
         seed=seed,
         output_dir=destination,
         row_counts={
-            relative_path: len(rows)
-            for relative_path, rows in generated.items()
+            relative_path: len(rows) for relative_path, rows in generated.items()
         },
     )
 
@@ -146,14 +143,13 @@ def _publish_generated_files(
     *,
     force: bool,
 ) -> None:
-    try:
-        destination.mkdir(parents=True, exist_ok=True)
-    except OSError as error:
-        raise GenerationError(
-            f"Unable to prepare output directory {destination}: {error}"
-        ) from error
-
     with _exclusive_output_lock(destination):
+        try:
+            destination.mkdir(parents=True, exist_ok=True)
+        except OSError as error:
+            raise GenerationError(
+                f"Unable to prepare output directory {destination}: {error}"
+            ) from error
         _publish_generated_files_under_lock(
             destination,
             generated,
@@ -161,22 +157,30 @@ def _publish_generated_files(
         )
 
 
+def _output_lock_path(destination: Path) -> Path:
+    normalized_destination = os.path.normcase(str(destination.resolve(strict=False)))
+    destination_digest = hashlib.sha256(
+        normalized_destination.encode("utf-8")
+    ).hexdigest()
+    return (
+        Path(tempfile.gettempdir())
+        / _LOCK_DIRECTORY_NAME
+        / f"{destination_digest}.lock"
+    )
+
+
 @contextmanager
 def _exclusive_output_lock(destination: Path) -> Iterable[None]:
-    if fcntl is None:
-        raise GenerationError(
-            "Concurrent output protection is unavailable: fcntl.flock "
-            "is not supported on this platform."
-        )
-
-    descriptor: int | None = None
+    lock_path = _output_lock_path(destination)
+    lock = FileLock(lock_path, timeout=_LOCK_TIMEOUT_SECONDS)
     try:
-        flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
-        descriptor = os.open(destination, flags)
-        fcntl.flock(descriptor, fcntl.LOCK_EX)
-    except OSError as error:
-        if descriptor is not None:
-            os.close(descriptor)
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        lock.acquire()
+    except Timeout as error:
+        raise GenerationError(
+            f"Timed out waiting for the output lock for {destination}."
+        ) from error
+    except (OSError, ValueError) as error:
         raise GenerationError(
             f"Unable to acquire output lock for {destination}: {error}"
         ) from error
@@ -185,8 +189,8 @@ def _exclusive_output_lock(destination: Path) -> Iterable[None]:
         yield
     finally:
         try:
-            os.close(descriptor)
-        except OSError as error:
+            lock.release()
+        except (OSError, ValueError) as error:
             raise GenerationError(
                 f"Unable to release output lock for {destination}: {error}"
             ) from error
@@ -204,16 +208,13 @@ def _publish_generated_files_under_lock(
             relative_path: destination / relative_path
             for relative_path in MANAGED_FILE_SCHEMAS
         }
-        existing = [
-            path for path in managed_destinations.values() if path.exists()
-        ]
+        existing = [path for path in managed_destinations.values() if path.exists()]
         if existing and not force:
             paths = ", ".join(
                 str(path.relative_to(destination)) for path in sorted(existing)
             )
             raise OutputExistsError(
-                f"Managed output already exists: {paths}. "
-                "Use --force to replace it."
+                f"Managed output already exists: {paths}. Use --force to replace it."
             )
         non_files = [path for path in existing if not path.is_file()]
         if non_files:
@@ -236,9 +237,7 @@ def _publish_generated_files_under_lock(
         _write_generated_files(staging_root, generated)
         _validate_written_files(staging_root)
     except (GenerationError, OSError) as error:
-        cleanup_error = _try_remove_transaction_directory(
-            transaction_root, destination
-        )
+        cleanup_error = _try_remove_transaction_directory(transaction_root, destination)
         detail = f"Unable to stage generated files: {error}"
         if cleanup_error is not None:
             detail += (
@@ -302,9 +301,7 @@ def _promote_transaction(
                 f"at {transaction_root}."
             ) from publication_error
 
-        cleanup_error = _try_remove_transaction_directory(
-            transaction_root, destination
-        )
+        cleanup_error = _try_remove_transaction_directory(transaction_root, destination)
         detail = (
             f"Unable to publish generated files: {publication_error}. "
             "The previous output state was restored."
@@ -316,9 +313,7 @@ def _promote_transaction(
             )
         raise GenerationError(detail) from publication_error
 
-    cleanup_error = _try_remove_transaction_directory(
-        transaction_root, destination
-    )
+    cleanup_error = _try_remove_transaction_directory(transaction_root, destination)
     if cleanup_error is not None:
         raise GenerationError(
             "Generated files were published, but transaction data could not "
@@ -355,9 +350,8 @@ def _rollback_transaction(
 def _try_remove_transaction_directory(
     transaction_root: Path, destination: Path
 ) -> OSError | None:
-    if (
-        transaction_root.parent != destination
-        or not transaction_root.name.startswith(_TRANSACTION_PREFIX)
+    if transaction_root.parent != destination or not transaction_root.name.startswith(
+        _TRANSACTION_PREFIX
     ):
         return OSError(f"Refusing to remove unsafe path {transaction_root}")
     try:
@@ -424,9 +418,7 @@ def _generate_customers(rng: random.Random) -> list[CsvRow]:
                 "customer_name": f"Synthetic {first_name} {last_name} {number:03d}",
                 "email": f"customer{number:04d}@example.test",
                 "country_code": rng.choice(_COUNTRY_CODES),
-                "updated_at": _format_timestamp(
-                    base_time + timedelta(seconds=number)
-                ),
+                "updated_at": _format_timestamp(base_time + timedelta(seconds=number)),
             }
         )
 
@@ -504,10 +496,7 @@ def _generate_order_run(
 def _order_line_counts(line_count: int) -> tuple[int, ...]:
     cycle_line_count = sum(_ORDER_LINE_COUNT_PATTERN)
     full_cycles, remaining_lines = divmod(line_count, cycle_line_count)
-    return (
-        _ORDER_LINE_COUNT_PATTERN * full_cycles
-        + (1,) * remaining_lines
-    )
+    return _ORDER_LINE_COUNT_PATTERN * full_cycles + (1,) * remaining_lines
 
 
 def _order_count_for_line_count(line_count: int) -> int:
@@ -523,10 +512,7 @@ def _quality_scenarios_by_order(
     eligible_orders: list[int] = []
     next_line_number = first_line_number
     for order_offset, line_count in enumerate(line_counts):
-        if (
-            line_count == 1
-            and next_line_number not in CORRECTION_LINE_NUMBERS
-        ):
+        if line_count == 1 and next_line_number not in CORRECTION_LINE_NUMBERS:
             eligible_orders.append(order_offset)
         next_line_number += line_count
 
@@ -537,9 +523,7 @@ def _quality_scenarios_by_order(
         )
     return {
         order_offset: assignment % 7
-        for assignment, order_offset in enumerate(
-            eligible_orders[:required_orders]
-        )
+        for assignment, order_offset in enumerate(eligible_orders[:required_orders])
     }
 
 
@@ -560,9 +544,7 @@ def _generate_order_header(
     }
     if include_sales_channel:
         channel = rng.choice((None, *sorted(ALLOWED_SALES_CHANNELS)))
-        header["sales_channel"] = (
-            NULL_VALUE if channel is None else channel
-        )
+        header["sales_channel"] = NULL_VALUE if channel is None else channel
     return header
 
 
@@ -632,20 +614,15 @@ def _generate_late_arriving(
             correction["quantity"] = str(int(original["quantity"]) + 1)
         else:
             original_price = Decimal(original["unit_price"])
-            correction["unit_price"] = _format_decimal(
-                original_price + Decimal("1.00")
-            )
+            correction["unit_price"] = _format_decimal(original_price + Decimal("1.00"))
         correction["updated_at"] = _format_timestamp(
-            LATE_ARRIVAL_TIME
-            + timedelta(seconds=1, microseconds=offset)
+            LATE_ARRIVAL_TIME + timedelta(seconds=1, microseconds=offset)
         )
         corrections.append(correction)
     return late_inserts + corrections
 
 
-def _apply_order_header_quality_scenario(
-    header: CsvRow, scenario: int | None
-) -> None:
+def _apply_order_header_quality_scenario(header: CsvRow, scenario: int | None) -> None:
     if scenario == 0:
         header["order_status"] = "cancelled"
     elif scenario == 3:
@@ -654,9 +631,7 @@ def _apply_order_header_quality_scenario(
         header["customer_id"] = ORPHAN_CUSTOMER_ID
 
 
-def _apply_order_line_quality_scenario(
-    row: CsvRow, scenario: int | None
-) -> None:
+def _apply_order_line_quality_scenario(row: CsvRow, scenario: int | None) -> None:
     if scenario == 1:
         row["unit_price"] = NULL_VALUE
     elif scenario == 2:
@@ -781,26 +756,16 @@ def _validate_generated_data(generated: GeneratedFiles) -> None:
         initial_orders + late_arriving,
     )
     _validate_corrections(run_1, late_arriving, existing_late_keys)
-    latest_run_2_update = max(
-        _parse_timestamp(row["updated_at"]) for row in run_2
-    )
+    latest_run_2_update = max(_parse_timestamp(row["updated_at"]) for row in run_2)
     _validate_late_inserts(
         late_arriving,
         new_late_keys,
         latest_run_2_update=latest_run_2_update,
     )
-    _validate_order_header_consistency(
-        run_1, include_sales_channel=False
-    )
-    _validate_order_header_consistency(
-        run_2, include_sales_channel=False
-    )
-    _validate_order_header_consistency(
-        run_3, include_sales_channel=True
-    )
-    _validate_order_header_consistency(
-        initial_orders, include_sales_channel=True
-    )
+    _validate_order_header_consistency(run_1, include_sales_channel=False)
+    _validate_order_header_consistency(run_2, include_sales_channel=False)
+    _validate_order_header_consistency(run_3, include_sales_channel=True)
+    _validate_order_header_consistency(initial_orders, include_sales_channel=True)
     _validate_multi_line_orders(initial_orders)
     _validate_logical_upsert(run_1, run_2, run_3, late_arriving)
     _validate_quality_scenarios(initial_orders + late_arriving)
@@ -818,15 +783,11 @@ def _validate_customers(customers: Sequence[CsvRow]) -> None:
             raise GenerationError(f"Invalid customer email: {email}")
         country_code = row["country_code"]
         if country_code and not _COUNTRY_CODE_PATTERN.fullmatch(country_code):
-            raise GenerationError(
-                f"Invalid customer country_code: {country_code}"
-            )
+            raise GenerationError(f"Invalid customer country_code: {country_code}")
         _parse_timestamp(row["updated_at"])
         grouped.setdefault(row["customer_id"], []).append(row)
 
-    versioned = {
-        key: rows for key, rows in grouped.items() if len(rows) > 1
-    }
+    versioned = {key: rows for key, rows in grouped.items() if len(rows) > 1}
     if len(grouped) != CUSTOMER_COUNT or len(versioned) != CUSTOMER_VERSION_COUNT:
         raise GenerationError("Customer version scenario is not deterministic.")
     for rows in versioned.values():
@@ -901,9 +862,7 @@ def _validate_orders(
         ):
             _require_non_empty(row[field_name], field_name)
         if not _INTEGER_PATTERN.fullmatch(row["quantity"]):
-            raise GenerationError(
-                f"Invalid INTEGER quantity: {row['quantity']}"
-            )
+            raise GenerationError(f"Invalid INTEGER quantity: {row['quantity']}")
         order_date = _parse_date(row["order_date"])
         if not minimum_order_date <= order_date <= maximum_order_date:
             raise GenerationError(
@@ -916,17 +875,14 @@ def _validate_orders(
             raise GenerationError(f"Invalid logical order type: {error}") from error
         _validate_decimal(row["unit_price"])
         if include_sales_channel and (
-            row["sales_channel"]
-            and row["sales_channel"] not in ALLOWED_SALES_CHANNELS
+            row["sales_channel"] and row["sales_channel"] not in ALLOWED_SALES_CHANNELS
         ):
             raise GenerationError("Invalid sales_channel value.")
 
 
 def _parse_timestamp(value: str) -> datetime:
     if not _TIMESTAMP_PATTERN.fullmatch(value):
-        raise GenerationError(
-            f"Invalid TIMESTAMP(6) UTC representation: {value}"
-        )
+        raise GenerationError(f"Invalid TIMESTAMP(6) UTC representation: {value}")
     try:
         parsed = datetime.strptime(value, "%Y-%m-%dT%H:%M:%S.%fZ")
     except ValueError as error:
@@ -947,9 +903,7 @@ def _validate_decimal(value: str) -> None:
     if value == NULL_VALUE:
         return
     if not _DECIMAL_PATTERN.fullmatch(value):
-        raise GenerationError(
-            f"Invalid DECIMAL(12,2) representation: {value}"
-        )
+        raise GenerationError(f"Invalid DECIMAL(12,2) representation: {value}")
     try:
         Decimal(value)
     except InvalidOperation as error:
@@ -986,9 +940,7 @@ def _validate_corrections(
     correction_keys: set[str],
 ) -> None:
     originals = {row["order_line_id"]: row for row in run_1}
-    corrections = [
-        row for row in run_3 if row["order_line_id"] in correction_keys
-    ]
+    corrections = [row for row in run_3 if row["order_line_id"] in correction_keys]
     if len(corrections) != RUN_3_CORRECTION_COUNT:
         raise GenerationError("Unexpected correction count.")
     for correction in corrections:
@@ -1012,9 +964,7 @@ def _validate_corrections(
         )
         for column in unchanged_columns:
             if correction[column] != original[column]:
-                raise GenerationError(
-                    f"A correction unexpectedly changes {column}."
-                )
+                raise GenerationError(f"A correction unexpectedly changes {column}.")
 
 
 def _validate_late_inserts(
@@ -1032,9 +982,7 @@ def _validate_late_inserts(
         if not minimum_date <= order_date <= maximum_date:
             raise GenerationError("A late insert is outside the historical range.")
         if _parse_timestamp(row["updated_at"]) <= latest_run_2_update:
-            raise GenerationError(
-                "A late insert updated_at must be later than Run 2."
-            )
+            raise GenerationError("A late insert updated_at must be later than Run 2.")
 
 
 def _validate_logical_upsert(
@@ -1043,9 +991,7 @@ def _validate_logical_upsert(
     run_3: Sequence[CsvRow],
     late_arriving: Sequence[CsvRow],
 ) -> None:
-    current = {
-        row["order_line_id"]: row for row in (*run_1, *run_2, *run_3)
-    }
+    current = {row["order_line_id"]: row for row in (*run_1, *run_2, *run_3)}
     updates = 0
     for candidate in late_arriving:
         key = candidate["order_line_id"]
@@ -1080,8 +1026,7 @@ def _validate_multi_line_orders(rows: Sequence[CsvRow]) -> None:
     if not order_lines_by_order:
         raise GenerationError("Initial orders must not be empty.")
     multi_line_orders = sum(
-        len(order_line_ids) >= 2
-        for order_line_ids in order_lines_by_order.values()
+        len(order_line_ids) >= 2 for order_line_ids in order_lines_by_order.values()
     )
     if multi_line_orders == len(order_lines_by_order):
         raise GenerationError(
@@ -1105,18 +1050,8 @@ def _validate_order_header_consistency(
         grouped.setdefault(row["order_id"], []).append(row)
     for order_id, order_rows in grouped.items():
         for column in header_columns:
-            if (
-                len(
-                    {
-                        row.get(column, NULL_VALUE)
-                        for row in order_rows
-                    }
-                )
-                != 1
-            ):
-                raise GenerationError(
-                    f"Inconsistent {column} for order_id {order_id}."
-                )
+            if len({row.get(column, NULL_VALUE) for row in order_rows}) != 1:
+                raise GenerationError(f"Inconsistent {column} for order_id {order_id}.")
 
 
 def _is_economically_invalid_unit_price(value: str) -> bool:
@@ -1126,14 +1061,10 @@ def _is_economically_invalid_unit_price(value: str) -> bool:
 def _validate_quality_scenarios(rows: Sequence[CsvRow]) -> None:
     scenario_keys = {
         "cancelled order": {
-            row["order_line_id"]
-            for row in rows
-            if row["order_status"] == "cancelled"
+            row["order_line_id"] for row in rows if row["order_status"] == "cancelled"
         },
         "null unit_price": {
-            row["order_line_id"]
-            for row in rows
-            if row["unit_price"] == NULL_VALUE
+            row["order_line_id"] for row in rows if row["unit_price"] == NULL_VALUE
         },
         "negative unit_price": {
             row["order_line_id"]
@@ -1142,9 +1073,7 @@ def _validate_quality_scenarios(rows: Sequence[CsvRow]) -> None:
             and _is_economically_invalid_unit_price(row["unit_price"])
         },
         "zero unit_price": {
-            row["order_line_id"]
-            for row in rows
-            if row["unit_price"] == "0.00"
+            row["order_line_id"] for row in rows if row["unit_price"] == "0.00"
         },
         "out-of-domain status": {
             row["order_line_id"]
@@ -1202,9 +1131,7 @@ def _validate_written_files(
         raise GenerationError("Staged output contains an unexpected file set.")
     written: GeneratedFiles = {}
     for relative_path in MANAGED_FILE_SCHEMAS:
-        with (root / relative_path).open(
-            encoding="utf-8", newline=""
-        ) as handle:
+        with (root / relative_path).open(encoding="utf-8", newline="") as handle:
             reader = csv.DictReader(handle)
             if tuple(reader.fieldnames or ()) != MANAGED_FILE_SCHEMAS[relative_path]:
                 raise GenerationError(f"Invalid written schema: {relative_path}")
