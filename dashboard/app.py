@@ -204,9 +204,7 @@ def _render_filters(
             key="dashboard_date_range",
         )
     with category_column:
-        category_widget_key = (
-            f"dashboard_category_widget_{translator.language}"
-        )
+        category_widget_key = f"dashboard_category_widget_{translator.language}"
         category_options = (ALL_FILTER_VALUES, *metadata.categories)
         st.session_state[category_widget_key] = (
             st.session_state.get("dashboard_category") or ALL_FILTER_VALUES
@@ -215,9 +213,7 @@ def _render_filters(
             translator("category"),
             category_options,
             format_func=lambda value: (
-                translator("all_categories")
-                if value == ALL_FILTER_VALUES
-                else value
+                translator("all_categories") if value == ALL_FILTER_VALUES else value
             ),
             key=category_widget_key,
             on_change=_store_filter_widget_value,
@@ -269,13 +265,13 @@ def _render_header(
     st.html(
         f"""
         <section class="dashboard-hero">
-          <div class="dashboard-eyebrow">{escape(translator('overview_eyebrow'))}</div>
-          <h1>{escape(translator('title'))}</h1>
-          <p>{escape(translator('subtitle'))}</p>
+          <div class="dashboard-eyebrow">{escape(translator("overview_eyebrow"))}</div>
+          <h1>{escape(translator("title"))}</h1>
+          <p>{escape(translator("subtitle"))}</p>
           <div class="dashboard-meta">
-            <span><strong>{escape(translator('period'))}:</strong>
+            <span><strong>{escape(translator("period"))}:</strong>
               {escape(format_period(period_start, period_end, translator.language))}</span>
-            <span><strong>{escape(translator('last_update'))}:</strong>
+            <span><strong>{escape(translator("last_update"))}:</strong>
               {escape(format_datetime(metadata.last_ingested_at, translator.language))}</span>
           </div>
         </section>
@@ -295,9 +291,7 @@ def _render_kpis(snapshot: DashboardSnapshot, translator: Translator) -> bool:
         ("kpi_orders", format_integer(kpis["distinct_orders"], translator.language)),
         (
             "kpi_average_order",
-            format_currency(
-                kpis["average_revenue_order_value"], translator.language
-            ),
+            format_currency(kpis["average_revenue_order_value"], translator.language),
         ),
         ("kpi_customers", format_integer(kpis["known_customers"], translator.language)),
     )
@@ -523,9 +517,7 @@ def _render_data_status(
         batch_rows = []
         for record in snapshot.incremental_loads.records():
             sequence = int(record["batch_sequence"])
-            label_key = (
-                "batch_late" if sequence == 4 else f"batch_run_{sequence}"
-            )
+            label_key = "batch_late" if sequence == 4 else f"batch_run_{sequence}"
             batch_rows.append(
                 {
                     translator("batch"): translator(label_key),

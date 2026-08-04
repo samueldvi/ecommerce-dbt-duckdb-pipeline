@@ -35,9 +35,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("init", help="Initialize the raw schema.")
-    subparsers.add_parser(
-        "load-all", help="Load or replay all six managed files."
-    )
+    subparsers.add_parser("load-all", help="Load or replay all six managed files.")
     load_batch = subparsers.add_parser(
         "load-batch", help="Load or replay one logical source batch."
     )

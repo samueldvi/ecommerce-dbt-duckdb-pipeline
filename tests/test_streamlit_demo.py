@@ -221,9 +221,9 @@ class StreamlitDemoTests(unittest.TestCase):
                 DBT_SCHEMA_ENV: schema,
             },
         ):
-            return AppTest.from_file(
-                str(REPOSITORY_ROOT / "streamlit_app.py")
-            ).run(timeout=20)
+            return AppTest.from_file(str(REPOSITORY_ROOT / "streamlit_app.py")).run(
+                timeout=20
+            )
 
     def test_default_path_is_project_relative_not_cwd_relative(self) -> None:
         other_directory = self.root / "another working directory"
@@ -231,9 +231,7 @@ class StreamlitDemoTests(unittest.TestCase):
         previous_directory = Path.cwd()
         try:
             os.chdir(other_directory)
-            resolved = resolve_database_path(
-                project_root=REPOSITORY_ROOT, environ={}
-            )
+            resolved = resolve_database_path(project_root=REPOSITORY_ROOT, environ={})
         finally:
             os.chdir(previous_directory)
         self.assertEqual(
@@ -303,9 +301,7 @@ class StreamlitDemoTests(unittest.TestCase):
         self.assertEqual(kpis["known_customers"], 2)
         self.assertEqual(kpis["average_revenue_order_value"], Decimal("17.50"))
         self.assertEqual(snapshot.region_summary.records()[0]["customer_region"], "FR")
-        self.assertEqual(
-            snapshot.incremental_loads.records()[-1]["cumulative_keys"], 3
-        )
+        self.assertEqual(snapshot.incremental_loads.records()[-1]["cumulative_keys"], 3)
         quality = snapshot.data_quality.records()[0]
         self.assertEqual(quality["duplicate_current_keys"], 0)
         self.assertEqual(quality["cancelled_lines"], 1)

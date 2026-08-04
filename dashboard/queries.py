@@ -27,7 +27,9 @@ with filtered_facts as (
 )
 """
 
-KPI_QUERY = FILTERED_FACTS_CTE + """
+KPI_QUERY = (
+    FILTERED_FACTS_CTE
+    + """
 select
     coalesce(sum(revenue), cast(0 as decimal(18, 2))) as total_revenue,
     count(distinct order_id) as distinct_orders,
@@ -48,8 +50,11 @@ select
     end as average_revenue_order_value
 from filtered_facts
 """
+)
 
-REVENUE_TREND_QUERY = FILTERED_FACTS_CTE + """
+REVENUE_TREND_QUERY = (
+    FILTERED_FACTS_CTE
+    + """
 select
     date_day as order_date,
     cast(sum(revenue) as decimal(18, 2)) as total_revenue
@@ -58,8 +63,11 @@ where revenue is not null
 group by date_day
 order by date_day
 """
+)
 
-REVENUE_BY_CATEGORY_MONTH_QUERY = FILTERED_FACTS_CTE + """
+REVENUE_BY_CATEGORY_MONTH_QUERY = (
+    FILTERED_FACTS_CTE
+    + """
 select
     date_day::date - (day(date_day) - 1)::integer as revenue_month,
     category,
@@ -69,8 +77,11 @@ where revenue is not null
 group by revenue_month, category
 order by revenue_month, category
 """
+)
 
-TOP_CUSTOMERS_QUERY = FILTERED_FACTS_CTE + """,
+TOP_CUSTOMERS_QUERY = (
+    FILTERED_FACTS_CTE
+    + """,
 customer_spend as (
     select
         customer_id,
@@ -93,8 +104,11 @@ from ranked
 where spend_position <= 10
 order by total_spend desc, customer_id
 """
+)
 
-ORDERS_BY_REGION_WEEK_QUERY = FILTERED_FACTS_CTE + """
+ORDERS_BY_REGION_WEEK_QUERY = (
+    FILTERED_FACTS_CTE
+    + """
 select
     year_number as order_year,
     iso_week_number,
@@ -105,8 +119,11 @@ where revenue is not null
 group by year_number, iso_week_number, customer_region
 order by order_year, iso_week_number, customer_region
 """
+)
 
-CATEGORY_RANKING_QUERY = FILTERED_FACTS_CTE + """,
+CATEGORY_RANKING_QUERY = (
+    FILTERED_FACTS_CTE
+    + """,
 monthly_category_revenue as (
     select
         date_day::date - (day(date_day) - 1)::integer as revenue_month,
@@ -131,8 +148,11 @@ select *
 from ranked
 order by revenue_month, revenue_position, category
 """
+)
 
-REGION_SUMMARY_QUERY = FILTERED_FACTS_CTE + """
+REGION_SUMMARY_QUERY = (
+    FILTERED_FACTS_CTE
+    + """
 select
     customer_region,
     count(distinct order_id) as completed_order_count
@@ -141,6 +161,7 @@ where revenue is not null
 group by customer_region
 order by completed_order_count desc, customer_region
 """
+)
 
 INCREMENTAL_LOAD_QUERY = """
 with versions as (

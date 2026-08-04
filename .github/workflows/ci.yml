@@ -11,16 +11,23 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 concurrency:
-  group: "${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}"
+  group: "${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}"
   cancel-in-progress: true
 
 jobs:
-  tests:
-    name: tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+  python-tests:
+    name: Python tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
 
     env:
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
@@ -28,23 +35,144 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@v6
 
       - name: Set up Python
         uses: actions/setup-python@v7
         with:
           python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
 
       - name: Install dependencies
-        run: python -m pip install -r requirements.txt
+        run: python -m pip install -r requirements.txt -r requirements-dev.txt
 
       - name: Check installed dependencies
         run: python -m pip check
 
+      - name: Lint Python sources
+        run: python -m ruff check scripts dashboard tests streamlit_app.py
+
+      - name: Check Python formatting
+        run: python -m ruff format --check scripts dashboard tests streamlit_app.py
+
       - name: Compile Python sources
         env:
           PYTHONPYCACHEPREFIX: ${{ runner.temp }}/pycache
-        run: python -m compileall scripts tests
+        run: python -m compileall scripts dashboard tests
 
-      - name: Run automated tests
-        run: python -m unittest discover -s tests -v
+      - name: Run complete Python test suite
+        run: python -m pytest -q
+
+  dbt-validation:
+    name: dbt build and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DBT_SEND_ANONYMOUS_USAGE_STATS: "false"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install runtime dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Prepare isolated source data and DuckDB profile
+        shell: bash
+        run: |
+          python scripts/generate_synthetic_data.py --output-dir "$RUNNER_TEMP/ecommerce/raw"
+          python scripts/ingest_raw_data.py \
+            --input-dir "$RUNNER_TEMP/ecommerce/raw" \
+            --database "$RUNNER_TEMP/ecommerce/ecommerce.duckdb" \
+            load-all
+          mkdir -p "$RUNNER_TEMP/dbt-profiles"
+          sed \
+            "s|data/warehouse/ecommerce.duckdb|$RUNNER_TEMP/ecommerce/ecommerce.duckdb|" \
+            profiles.yml.example > "$RUNNER_TEMP/dbt-profiles/profiles.yml"
+
+      - name: Resolve dbt dependencies
+        run: >-
+          dbt deps --profiles-dir "$RUNNER_TEMP/dbt-profiles"
+          --log-path "$RUNNER_TEMP/dbt-logs"
+
+      - name: Run dbt build
+        run: >-
+          dbt build --profiles-dir "$RUNNER_TEMP/dbt-profiles"
+          --target-path "$RUNNER_TEMP/dbt-target"
+          --log-path "$RUNNER_TEMP/dbt-logs"
+
+      - name: Run dbt test separately
+        run: >-
+          dbt test --profiles-dir "$RUNNER_TEMP/dbt-profiles"
+          --target-path "$RUNNER_TEMP/dbt-target"
+          --log-path "$RUNNER_TEMP/dbt-logs"
+
+  security:
+    name: Dependency and secret scans
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+    steps:
+      - name: Check out complete Git history
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install audit dependencies
+        run: python -m pip install -r requirements-dev.txt
+
+      - name: Audit Python dependencies
+        env:
+          PIP_AUDIT_CACHE_DIR: ${{ runner.temp }}/pip-audit-cache
+        run: >-
+          python -m pip_audit --cache-dir "$PIP_AUDIT_CACHE_DIR"
+          -r requirements.txt -r requirements-dev.txt
+
+      - name: Scan Git history for secrets
+        uses: gitleaks/gitleaks-action@v3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  tests:
+    name: tests
+    if: ${{ always() }}
+    needs:
+      - python-tests
+      - dbt-validation
+      - security
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Verify all required checks passed
+        env:
+          PYTHON_TESTS_RESULT: ${{ needs.python-tests.result }}
+          DBT_VALIDATION_RESULT: ${{ needs.dbt-validation.result }}
+          SECURITY_RESULT: ${{ needs.security.result }}
+        run: |
+          test "$PYTHON_TESTS_RESULT" = "success"
+          test "$DBT_VALIDATION_RESULT" = "success"
+          test "$SECURITY_RESULT" = "success"

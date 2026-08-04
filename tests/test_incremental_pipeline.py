@@ -25,16 +25,10 @@ from raw_ingestion import RawIngestor  # noqa: E402
 from synthetic_data import generate_dataset  # noqa: E402
 
 CONTRACT_METRICS = yaml.safe_load(
-    (REPOSITORY_ROOT / "docs/expected_run_metrics.yml").read_text(
-        encoding="utf-8"
-    )
+    (REPOSITORY_ROOT / "docs/expected_run_metrics.yml").read_text(encoding="utf-8")
 )
-FINAL_KEY_COUNT = CONTRACT_METRICS["order_lines"]["final"][
-    "distinct_keys"
-]["exact"]
-LATE_METRICS = CONTRACT_METRICS["order_lines"]["runs"]["run_3"][
-    "late_arriving"
-]
+FINAL_KEY_COUNT = CONTRACT_METRICS["order_lines"]["final"]["distinct_keys"]["exact"]
+LATE_METRICS = CONTRACT_METRICS["order_lines"]["runs"]["run_3"]["late_arriving"]
 
 
 def read_csv_rows(path: Path) -> list[dict[str, str]]:
@@ -90,23 +84,17 @@ class IncrementalPipelineTests(unittest.TestCase):
             "run_1": read_csv_rows(cls.input_root / "run_1/orders.csv"),
             "run_2": read_csv_rows(cls.input_root / "run_2/orders.csv"),
             "run_3": read_csv_rows(cls.input_root / "run_3/orders.csv"),
-            "late": read_csv_rows(
-                cls.input_root / "run_3/late_arriving/orders.csv"
-            ),
+            "late": read_csv_rows(cls.input_root / "run_3/late_arriving/orders.csv"),
         }
         cls.ordinary_counts = {
-            run: len(rows)
-            for run, rows in cls.source_rows.items()
-            if run != "late"
+            run: len(rows) for run, rows in cls.source_rows.items() if run != "late"
         }
         cls.ingestor = RawIngestor(
             cls.database_path,
             input_root=cls.input_root,
         )
         cls.states: dict[str, tuple[tuple[object, ...], ...]] = {}
-        cls.dimension_states: dict[
-            str, tuple[tuple[tuple[object, ...], ...], ...]
-        ] = {}
+        cls.dimension_states: dict[str, tuple[tuple[tuple[object, ...], ...], ...]] = {}
         cls.metrics: dict[str, dict[str, int]] = {}
         cls.replay_results: dict[str, object] = {}
 
@@ -126,13 +114,9 @@ class IncrementalPipelineTests(unittest.TestCase):
         if cls.states["after_full_reprocessing"] != final_state:
             raise AssertionError("Full reprocessing changed the final fact state.")
         if cls._dimension_state() != cls.dimension_states["after_late_arriving"]:
-            raise AssertionError(
-                "Full reprocessing changed a dimensional table."
-            )
+            raise AssertionError("Full reprocessing changed a dimensional table.")
 
-        cls.full_refresh_database_path = (
-            cls.root / "warehouse" / "full-refresh.duckdb"
-        )
+        cls.full_refresh_database_path = cls.root / "warehouse" / "full-refresh.duckdb"
         shutil.copy2(cls.database_path, cls.full_refresh_database_path)
         full_refresh_profiles = cls.root / "full-refresh-profiles"
         full_refresh_profiles.mkdir()
@@ -161,9 +145,7 @@ class IncrementalPipelineTests(unittest.TestCase):
             log_path=cls.root / "full-refresh-logs",
             full_refresh=True,
         )
-        cls.full_refresh_fact_state = cls._fact_state(
-            cls.full_refresh_database_path
-        )
+        cls.full_refresh_fact_state = cls._fact_state(cls.full_refresh_database_path)
         cls.full_refresh_dimension_state = cls._dimension_state(
             cls.full_refresh_database_path
         )
@@ -186,9 +168,7 @@ class IncrementalPipelineTests(unittest.TestCase):
         if replay_state != state:
             raise AssertionError(f"Replay changed the fact after {source_batch}.")
         if cls._dimension_state() != dimension_state:
-            raise AssertionError(
-                f"Replay changed a dimension after {source_batch}."
-            )
+            raise AssertionError(f"Replay changed a dimension after {source_batch}.")
         cls.replay_results[source_batch] = replay_result
 
     @classmethod
@@ -228,8 +208,7 @@ class IncrementalPipelineTests(unittest.TestCase):
         )
         if result.returncode != 0:
             raise AssertionError(
-                "dbt build failed:\n"
-                f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+                f"dbt build failed:\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
             )
 
     @classmethod
@@ -253,9 +232,7 @@ class IncrementalPipelineTests(unittest.TestCase):
             connection.close()
 
     @classmethod
-    def _fact_business_state(
-        cls, label: str
-    ) -> dict[str, tuple[object, ...]]:
+    def _fact_business_state(cls, label: str) -> dict[str, tuple[object, ...]]:
         rows = cls.states[label]
         connection = duckdb.connect(str(cls.database_path), read_only=True)
         try:
@@ -347,11 +324,14 @@ class IncrementalPipelineTests(unittest.TestCase):
             connection.close()
 
     def test_ordinary_windows_and_final_key_metrics(self) -> None:
-        self.assertEqual(self.ordinary_counts, {
-            "run_1": 3_000,
-            "run_2": 1_000,
-            "run_3": 1_000,
-        })
+        self.assertEqual(
+            self.ordinary_counts,
+            {
+                "run_1": 3_000,
+                "run_2": 1_000,
+                "run_3": 1_000,
+            },
+        )
         self.assertEqual(sum(self.ordinary_counts.values()), 5_000)
         expected_cumulative = {
             "after_run_1": self.ordinary_counts["run_1"],
@@ -362,37 +342,25 @@ class IncrementalPipelineTests(unittest.TestCase):
         }
         for label, expected_count in expected_cumulative.items():
             with self.subTest(phase=label):
-                self.assertEqual(
-                    self.metrics[label]["row_count"], expected_count
-                )
-                self.assertEqual(
-                    self.metrics[label]["distinct_keys"], expected_count
-                )
+                self.assertEqual(self.metrics[label]["row_count"], expected_count)
+                self.assertEqual(self.metrics[label]["distinct_keys"], expected_count)
                 self.assertEqual(self.metrics[label]["duplicate_keys"], 0)
 
     def test_late_inserts_and_corrections_apply_exactly_once(self) -> None:
         before = self._fact_business_state("after_run_3_ordinary")
         after = self._fact_business_state("after_late_arriving")
         initial_keys = set(before)
-        late_keys = {
-            row["order_line_id"] for row in self.source_rows["late"]
-        }
+        late_keys = {row["order_line_id"] for row in self.source_rows["late"]}
         inserted_keys = set(after) - initial_keys
-        changed_keys = {
-            key for key in initial_keys if before[key] != after[key]
-        }
+        changed_keys = {key for key in initial_keys if before[key] != after[key]}
         self.assertEqual(len(self.source_rows["late"]), 15)
         self.assertEqual(len(inserted_keys), LATE_METRICS["inserts"]["exact"])
-        self.assertEqual(
-            len(changed_keys), LATE_METRICS["corrections"]["exact"]
-        )
+        self.assertEqual(len(changed_keys), LATE_METRICS["corrections"]["exact"])
         self.assertEqual(inserted_keys, late_keys - initial_keys)
         self.assertEqual(changed_keys, late_keys & initial_keys)
         self.assertTrue(all(after[key][3] is None for key in late_keys))
 
-        expected_late = {
-            row["order_line_id"]: row for row in self.source_rows["late"]
-        }
+        expected_late = {row["order_line_id"]: row for row in self.source_rows["late"]}
         connection = duckdb.connect(str(self.database_path), read_only=True)
         try:
             actual_late = {
@@ -424,9 +392,7 @@ class IncrementalPipelineTests(unittest.TestCase):
                 source["customer_id"],
                 source["product_id"],
                 int(source["quantity"]),
-                Decimal(source["unit_price"])
-                if source["unit_price"]
-                else None,
+                Decimal(source["unit_price"]) if source["unit_price"] else None,
                 source["order_status"],
                 date.fromisoformat(source["order_date"]),
                 datetime.strptime(

@@ -13,6 +13,12 @@ Progetto tecnico di Data Engineering per dati e-commerce che trasforma ordini in
 
 [Apri la demo online](https://ecommerce-dbt-duckdb-pipeline-97sughgocnjpxtwwm6mm7h.streamlit.app/) · [Dashboard](#dashboard-streamlit) · [Architettura](#architettura) · [Esecuzione locale](#esecuzione-locale) · [Documentazione](#documentazione)
 
+> **Synthetic demo data / dati sintetici**
+>
+> Tutti i dati sono sintetici. Lo snapshot
+> `data/warehouse/ecommerce.duckdb` è mantenuto intenzionalmente nel repository
+> esclusivamente per la demo; Streamlit lo apre sempre in modalità read-only.
+
 ![Dashboard Streamlit in italiano con KPI e analisi delle vendite](docs/images/dashboard-overview-light.png)
 
 ## Problema business
@@ -139,7 +145,7 @@ surrogate `Unknown`, senza perdita di fatti.
 
 | Tecnologia | Ruolo |
 |---|---|
-| Python 3.11+ | Generazione sintetica, ingestion e test; verificato localmente con Python 3.12 |
+| Python 3.12 | Generazione sintetica, ingestion e test |
 | DuckDB | Raw layer, manifest, persistenza locale e motore analitico |
 | dbt Core + dbt-duckdb | Trasformazioni, incrementalità, test e modello dimensionale |
 | SQL | Regole di qualità, star schema e analisi |
@@ -173,6 +179,13 @@ Il percorso predefinito è `data/warehouse/ecommerce.duckdb` e lo schema è
 
 ## Esecuzione locale
 
+### Sistemi operativi supportati
+
+Il generatore, l'ingestion, dbt e la dashboard supportano Python 3.12 su Linux,
+macOS e Windows. La CI esegue l'intera suite Python sia su Ubuntu sia su Windows;
+macOS viene verificato localmente. Il lock del generatore usa `filelock` e non
+dipende da API disponibili soltanto sui sistemi Unix.
+
 ### 1. Ambiente
 
 ```bash
@@ -185,6 +198,16 @@ dbt debug --profiles-dir .
 
 `profiles.yml` resta locale e ignorato da Git; `profiles.yml.example` è il
 template riproducibile.
+
+Su Windows l'attivazione equivalente in PowerShell è:
+
+```powershell
+py -3.12 -m venv .venv
+.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+Copy-Item profiles.yml.example profiles.yml
+dbt debug --profiles-dir .
+```
 
 ### 2. Pipeline completa
 
@@ -240,17 +263,25 @@ dbt show --profiles-dir . --limit 100 --inline "$(cat analyses/monthly_category_
 ## Test e data quality
 
 ```bash
+python -m pip install -r requirements.txt -r requirements-dev.txt
 python -m pip check
 PYTHONPYCACHEPREFIX=/tmp/python-cache python -m compileall scripts dashboard tests
-python -m unittest discover -s tests -v
+python -m ruff check scripts dashboard tests streamlit_app.py
+python -m ruff format --check scripts dashboard tests streamlit_app.py
+python -m pytest -q
+python -m pip_audit -r requirements.txt -r requirements-dev.txt
+gitleaks git --redact --no-banner --log-opts="--all" .
 dbt build --profiles-dir .
+dbt test --profiles-dir .
 ```
 
 La suite copre determinismo byte-per-byte, importi `Decimal`, transazioni ACID,
 rollback, isolamento, persistenza, replay idempotente, schema evolution,
 correction, membri `Unknown`, revenue, query analitiche e comportamento
-read-only della dashboard. La CI esegue i controlli Python a ogni pull request
-verso `main` e a ogni push su `main`.
+read-only della dashboard. Gitleaks è uno strumento esterno da installare
+separatamente per la scansione locale della cronologia. La CI esegue test,
+lint, formatting check, validazioni dbt e scansioni di sicurezza a ogni pull
+request verso `main` e a ogni push su `main`.
 
 ## Struttura del progetto
 
@@ -276,6 +307,9 @@ streamlit_app.py          entry point della dashboard
 - [Gestione incrementale](docs/GESTIONE_INCREMENTALE.md)
 - [Trasferimento concettuale verso Databricks](docs/TRASFERIMENTO_DATABRICKS.md)
 - [Workflow architetturale](docs/architecture/workflow.svg)
+- [Linee guida per contribuire](CONTRIBUTING.md)
+- [Politica di sicurezza](SECURITY.md)
+- [Licenza MIT](LICENSE)
 
 ## Limiti
 
