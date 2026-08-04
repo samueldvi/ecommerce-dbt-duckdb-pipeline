@@ -103,21 +103,13 @@ with (REPOSITORY_ROOT / "docs/expected_run_metrics.yml").open(
 ) as metrics_handle:
     CONTRACT_METRICS = yaml.safe_load(metrics_handle)
 
-INITIAL_ORDER_COUNT = CONTRACT_METRICS["order_lines"]["initial_dataset"][
-    "input_rows"
-]["exact"]
-FINAL_ORDER_KEYS = CONTRACT_METRICS["order_lines"]["final"][
-    "distinct_keys"
-]["exact"]
-LATE_METRICS = CONTRACT_METRICS["order_lines"]["runs"]["run_3"][
-    "late_arriving"
-]
-CUSTOMER_KEYS = CONTRACT_METRICS["master_data"]["customers"]["distinct_keys"][
+INITIAL_ORDER_COUNT = CONTRACT_METRICS["order_lines"]["initial_dataset"]["input_rows"][
     "exact"
 ]
-PRODUCT_KEYS = CONTRACT_METRICS["master_data"]["products"]["distinct_keys"][
-    "exact"
-]
+FINAL_ORDER_KEYS = CONTRACT_METRICS["order_lines"]["final"]["distinct_keys"]["exact"]
+LATE_METRICS = CONTRACT_METRICS["order_lines"]["runs"]["run_3"]["late_arriving"]
+CUSTOMER_KEYS = CONTRACT_METRICS["master_data"]["customers"]["distinct_keys"]["exact"]
+PRODUCT_KEYS = CONTRACT_METRICS["master_data"]["products"]["distinct_keys"]["exact"]
 
 
 def read_csv(path: Path) -> tuple[tuple[str, ...], list[dict[str, str]]]:
@@ -126,13 +118,9 @@ def read_csv(path: Path) -> tuple[tuple[str, ...], list[dict[str, str]]]:
         return tuple(reader.fieldnames or ()), list(reader)
 
 
-def write_csv(
-    path: Path, columns: tuple[str, ...], rows: list[dict[str, str]]
-) -> None:
+def write_csv(path: Path, columns: tuple[str, ...], rows: list[dict[str, str]]) -> None:
     with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(
-            handle, fieldnames=columns, lineterminator="\n"
-        )
+        writer = csv.DictWriter(handle, fieldnames=columns, lineterminator="\n")
         writer.writeheader()
         writer.writerows(rows)
 
@@ -141,9 +129,7 @@ def file_checksum(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def independent_row_hash(
-    columns: tuple[str, ...], values: tuple[str, ...]
-) -> str:
+def independent_row_hash(columns: tuple[str, ...], values: tuple[str, ...]) -> str:
     payload = json.dumps(
         list(zip(columns, values, strict=True)),
         ensure_ascii=False,
@@ -232,12 +218,8 @@ class RawIngestionTests(unittest.TestCase):
         self.root = Path(self.directory.name)
         self.input_root = self.root / "input data with spaces"
         shutil.copytree(self.generated_root, self.input_root)
-        self.database_path = (
-            self.root / "warehouse with spaces" / "raw database.duckdb"
-        )
-        self.ingestor = RawIngestor(
-            self.database_path, input_root=self.input_root
-        )
+        self.database_path = self.root / "warehouse with spaces" / "raw database.duckdb"
+        self.ingestor = RawIngestor(self.database_path, input_root=self.input_root)
 
     def tearDown(self) -> None:
         self.directory.cleanup()
@@ -268,16 +250,12 @@ class RawIngestionTests(unittest.TestCase):
                     for table, columns in EXPECTED_TABLE_COLUMNS.items()
                 },
             )
-            self.assertEqual(
-                actual_types[("order_lines", "quantity")], "INTEGER"
-            )
+            self.assertEqual(actual_types[("order_lines", "quantity")], "INTEGER")
             self.assertEqual(
                 actual_types[("order_lines", "unit_price")],
                 "DECIMAL(12,2)",
             )
-            self.assertEqual(
-                actual_types[("order_lines", "order_date")], "DATE"
-            )
+            self.assertEqual(actual_types[("order_lines", "order_date")], "DATE")
             self.assertEqual(
                 actual_types[("order_lines", "updated_at")],
                 "TIMESTAMP WITH TIME ZONE",
@@ -353,8 +331,7 @@ class RawIngestionTests(unittest.TestCase):
         self,
     ) -> None:
         csv_rows = {
-            path: read_csv(self.input_root / path)[1]
-            for path in EXPECTED_FILES
+            path: read_csv(self.input_root / path)[1] for path in EXPECTED_FILES
         }
         result = self.ingestor.ingest_dataset()
         self.assertEqual(result.files_loaded, 6)
@@ -381,9 +358,7 @@ class RawIngestionTests(unittest.TestCase):
                 for path in EXPECTED_FILES[2:5]
                 for row in csv_rows[path]
             }
-            late_keys = {
-                row["order_line_id"] for row in csv_rows[EXPECTED_FILES[5]]
-            }
+            late_keys = {row["order_line_id"] for row in csv_rows[EXPECTED_FILES[5]]}
             correction_keys = initial_keys & late_keys
             self.assertEqual(
                 len(correction_keys),
@@ -599,9 +574,7 @@ class RawIngestionTests(unittest.TestCase):
         finally:
             connection.close()
 
-        reopened_ingestor = RawIngestor(
-            self.database_path, input_root=self.input_root
-        )
+        reopened_ingestor = RawIngestor(self.database_path, input_root=self.input_root)
         replay = reopened_ingestor.ingest_dataset()
         self.assertEqual(first_result.files_loaded, 6)
         self.assertEqual(replay.files_loaded, 0)
@@ -625,13 +598,9 @@ class RawIngestionTests(unittest.TestCase):
 
     def test_single_file_load_and_replay_are_idempotent(self) -> None:
         first = self.ingestor.ingest_file(Path("run_2/orders.csv"))
-        reopened = RawIngestor(
-            self.database_path, input_root=self.input_root
-        )
+        reopened = RawIngestor(self.database_path, input_root=self.input_root)
         second = reopened.ingest_file(Path("run_2/orders.csv"))
-        source_rows = len(
-            read_csv(self.input_root / "run_2/orders.csv")[1]
-        )
+        source_rows = len(read_csv(self.input_root / "run_2/orders.csv")[1])
         self.assertEqual(first.files_loaded, 1)
         self.assertEqual(first.rows_inserted, source_rows)
         self.assertEqual(second.files_skipped, 1)
@@ -645,9 +614,7 @@ class RawIngestionTests(unittest.TestCase):
         columns, rows = read_csv(source)
         counts = Counter(row["customer_id"] for row in rows)
         customer_to_reduce = next(
-            customer_id
-            for customer_id, count in counts.items()
-            if count > 1
+            customer_id for customer_id, count in counts.items() if count > 1
         )
         retained_version = False
         reduced_rows = []
@@ -791,18 +758,14 @@ class RawIngestionTests(unittest.TestCase):
             row["order_line_id"]
             for row in read_csv(self.input_root / "run_1/orders.csv")[1]
         }
-        correction = next(
-            row for row in rows if row["order_line_id"] in run_1_keys
-        )
+        correction = next(row for row in rows if row["order_line_id"] in run_1_keys)
         run_2_key = read_csv(self.input_root / "run_2/orders.csv")[1][0][
             "order_line_id"
         ]
         correction["order_line_id"] = run_2_key
         write_csv(source, columns, rows)
 
-        with self.assertRaisesRegex(
-            SchemaValidationError, "exclusively in Run 1"
-        ):
+        with self.assertRaisesRegex(SchemaValidationError, "exclusively in Run 1"):
             self.ingestor.ingest_batch("run_3_late_arriving")
 
         self.assertEqual(raw_counts(self.database_path), (204, 80, 5_000, 5))
@@ -813,9 +776,7 @@ class RawIngestionTests(unittest.TestCase):
         source = self.input_root / "run_3/late_arriving/orders.csv"
         columns, rows = read_csv(source)
         run_2_rows = read_csv(self.input_root / "run_2/orders.csv")[1]
-        rows[0]["updated_at"] = max(
-            row["updated_at"] for row in run_2_rows
-        )
+        rows[0]["updated_at"] = max(row["updated_at"] for row in run_2_rows)
         write_csv(source, columns, rows)
 
         with self.assertRaisesRegex(
@@ -834,9 +795,7 @@ class RawIngestionTests(unittest.TestCase):
         source = self.input_root / "run_3/late_arriving/orders.csv"
         columns, rows = read_csv(source)
         run_2_rows = read_csv(self.input_root / "run_2/orders.csv")[1]
-        rows[0]["updated_at"] = max(
-            row["updated_at"] for row in run_2_rows
-        )
+        rows[0]["updated_at"] = max(row["updated_at"] for row in run_2_rows)
         write_csv(source, columns, rows)
 
         with self.assertRaisesRegex(
@@ -870,9 +829,7 @@ class RawIngestionTests(unittest.TestCase):
         connection = duckdb.connect(str(self.database_path), read_only=True)
         try:
             self.assertEqual(
-                connection.execute(
-                    "SELECT * FROM raw.ingestion_manifest"
-                ).fetchall(),
+                connection.execute("SELECT * FROM raw.ingestion_manifest").fetchall(),
                 original_manifest,
             )
         finally:
@@ -901,10 +858,7 @@ class RawIngestionTests(unittest.TestCase):
                         source,
                         reduced_columns,
                         [
-                            {
-                                column: row[column]
-                                for column in reduced_columns
-                            }
+                            {column: row[column] for column in reduced_columns}
                             for row in rows
                         ],
                     )
@@ -945,9 +899,9 @@ class RawIngestionTests(unittest.TestCase):
                         encoding="utf-8",
                     )
                 with self.assertRaises(SchemaValidationError):
-                    RawIngestor(
-                        database, input_root=input_root
-                    ).ingest_file(Path("run_1/orders.csv"))
+                    RawIngestor(database, input_root=input_root).ingest_file(
+                        Path("run_1/orders.csv")
+                    )
                 self.assertFalse(database.exists())
 
     def test_error_after_partial_inserts_rolls_back_data_and_manifest(
@@ -1021,9 +975,7 @@ class RawIngestionTests(unittest.TestCase):
         foreign_file = reordered_root / "run_2/foreign.csv"
         foreign_file.write_text("not,managed\n1,2\n", encoding="utf-8")
         database = self.root / "reordered.duckdb"
-        result = RawIngestor(
-            database, input_root=reordered_root
-        ).ingest_dataset()
+        result = RawIngestor(database, input_root=reordered_root).ingest_dataset()
         self.assertEqual(
             [Path(file.source_file) for file in result.files],
             list(EXPECTED_FILES),
@@ -1091,9 +1043,7 @@ class RawIngestionTests(unittest.TestCase):
             text=True,
             timeout=30,
         )
-        self.assertEqual(
-            batch_replay.returncode, 0, batch_replay.stderr
-        )
+        self.assertEqual(batch_replay.returncode, 0, batch_replay.stderr)
         batch_payload = json.loads(batch_replay.stdout)
         self.assertEqual(batch_payload["files_skipped"], 3)
         self.assertEqual(batch_payload["rows_inserted"], 0)

@@ -16,9 +16,7 @@ import duckdb
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_INPUT_ROOT = REPOSITORY_ROOT / "data" / "raw"
-DEFAULT_DATABASE_PATH = (
-    REPOSITORY_ROOT / "data" / "warehouse" / "ecommerce.duckdb"
-)
+DEFAULT_DATABASE_PATH = REPOSITORY_ROOT / "data" / "warehouse" / "ecommerce.duckdb"
 
 CUSTOMER_COLUMNS = (
     "customer_id",
@@ -162,9 +160,7 @@ def _parse_timestamp(value: str, column: str = "updated_at") -> datetime:
 
 def _parse_date(value: str, column: str = "order_date") -> date:
     if len(value) != 10:
-        raise SchemaValidationError(
-            f"{column} must use YYYY-MM-DD: {value!r}."
-        )
+        raise SchemaValidationError(f"{column} must use YYYY-MM-DD: {value!r}.")
     try:
         parsed = date.fromisoformat(value)
     except ValueError as error:
@@ -198,9 +194,7 @@ def _parse_decimal(value: str, column: str) -> Decimal | None:
     if value == "":
         return None
     if value.strip() != value or "." not in value:
-        raise SchemaValidationError(
-            f"{column} is not a DECIMAL(12,2): {value!r}."
-        )
+        raise SchemaValidationError(f"{column} is not a DECIMAL(12,2): {value!r}.")
     integer_part, fractional_part = value.lstrip("-").split(".", maxsplit=1)
     if (
         not integer_part
@@ -209,9 +203,7 @@ def _parse_decimal(value: str, column: str) -> Decimal | None:
         or len(fractional_part) != 2
         or not fractional_part.isdigit()
     ):
-        raise SchemaValidationError(
-            f"{column} is not a DECIMAL(12,2): {value!r}."
-        )
+        raise SchemaValidationError(f"{column} is not a DECIMAL(12,2): {value!r}.")
     try:
         parsed = Decimal(value)
     except InvalidOperation as error:
@@ -337,9 +329,7 @@ BATCH_FILE_PATHS = {
     ),
     "run_2": (Path("run_2/orders.csv"),),
     "run_3": (Path("run_3/orders.csv"),),
-    "run_3_late_arriving": (
-        Path("run_3/late_arriving/orders.csv"),
-    ),
+    "run_3_late_arriving": (Path("run_3/late_arriving/orders.csv"),),
 }
 
 TABLE_DDL = (
@@ -523,9 +513,7 @@ class RawIngestor:
     def ingest_dataset(self) -> IngestionResult:
         """Load all six managed CSV files in one transaction."""
 
-        prepared_files = tuple(
-            self._prepare_file(spec) for spec in FILE_SPECS
-        )
+        prepared_files = tuple(self._prepare_file(spec) for spec in FILE_SPECS)
         self._validate_complete_dataset(prepared_files)
         return self._ingest_prepared_files(prepared_files)
 
@@ -543,12 +531,10 @@ class RawIngestor:
         if batch_paths is None:
             allowed = ", ".join(BATCH_FILE_PATHS)
             raise IngestionError(
-                f"Unknown source batch {source_batch!r}; expected one of "
-                f"{allowed}."
+                f"Unknown source batch {source_batch!r}; expected one of {allowed}."
             )
         prepared_files = tuple(
-            self._prepare_file(FILE_SPEC_BY_PATH[path])
-            for path in batch_paths
+            self._prepare_file(FILE_SPEC_BY_PATH[path]) for path in batch_paths
         )
         return self._ingest_prepared_files(prepared_files)
 
@@ -572,9 +558,7 @@ class RawIngestor:
                     connection, prepared_file.source_file
                 )
                 if manifest is not None:
-                    self._validate_replay_state(
-                        connection, prepared_file, manifest
-                    )
+                    self._validate_replay_state(connection, prepared_file, manifest)
                     results.append(
                         FileIngestionResult(
                             prepared_file.source_file,
@@ -585,9 +569,7 @@ class RawIngestor:
                     )
                     continue
 
-                self._validate_order_batch_against_raw(
-                    connection, prepared_file
-                )
+                self._validate_order_batch_against_raw(connection, prepared_file)
                 ingested_at = datetime.now(timezone.utc)
                 self._insert_rows(connection, prepared_file, ingested_at)
                 self._after_file_rows_inserted(connection, prepared_file)
@@ -607,9 +589,7 @@ class RawIngestor:
             transaction_open = False
             return IngestionResult(
                 files_loaded=sum(result.status == "loaded" for result in results),
-                files_skipped=sum(
-                    result.status == "skipped" for result in results
-                ),
+                files_skipped=sum(result.status == "skipped" for result in results),
                 rows_inserted=sum(result.rows_inserted for result in results),
                 files=tuple(results),
             )
@@ -644,9 +624,7 @@ class RawIngestor:
             ) from error
         spec = FILE_SPEC_BY_PATH.get(relative_path)
         if spec is None:
-            raise IngestionError(
-                f"Unmanaged source file: {relative_path.as_posix()}."
-            )
+            raise IngestionError(f"Unmanaged source file: {relative_path.as_posix()}.")
         return spec
 
     def _prepare_file(self, spec: FileSpec) -> PreparedFile:
@@ -680,8 +658,7 @@ class RawIngestor:
             ) from error
         except csv.Error as error:
             raise SchemaValidationError(
-                f"Invalid CSV header in {spec.relative_path.as_posix()}: "
-                f"{error}"
+                f"Invalid CSV header in {spec.relative_path.as_posix()}: {error}"
             ) from error
         if header != spec.columns:
             raise SchemaValidationError(
@@ -745,20 +722,16 @@ class RawIngestor:
         if not isinstance(order_date, date):
             raise SchemaValidationError("order_date was not parsed as DATE.")
         if (
-            spec.minimum_order_date is not None
-            and order_date < spec.minimum_order_date
+            spec.minimum_order_date is not None and order_date < spec.minimum_order_date
         ) or (
-            spec.maximum_order_date is not None
-            and order_date > spec.maximum_order_date
+            spec.maximum_order_date is not None and order_date > spec.maximum_order_date
         ):
             raise SchemaValidationError(
                 f"{spec.relative_path.as_posix()} line {source_row_number} "
                 f"has order_date {order_date} outside its run window."
             )
 
-    def _validate_file_rows(
-        self, spec: FileSpec, rows: Sequence[PreparedRow]
-    ) -> None:
+    def _validate_file_rows(self, spec: FileSpec, rows: Sequence[PreparedRow]) -> None:
         if not rows:
             raise SchemaValidationError(
                 f"{spec.relative_path.as_posix()} contains no data rows."
@@ -767,8 +740,7 @@ class RawIngestor:
             customer_ids = [str(row.typed_values[0]) for row in rows]
             if len(set(customer_ids)) != 200:
                 raise SchemaValidationError(
-                    "customers.csv must contain 200 distinct customer_id "
-                    "values."
+                    "customers.csv must contain 200 distinct customer_id values."
                 )
             versioned = {
                 customer_id
@@ -777,8 +749,7 @@ class RawIngestor:
             }
             if not 3 <= len(versioned) <= 4:
                 raise SchemaValidationError(
-                    "customers.csv must contain three or four versioned "
-                    "customers."
+                    "customers.csv must contain three or four versioned customers."
                 )
         elif spec.dataset_name == "products":
             product_ids = [str(row.typed_values[0]) for row in rows]
@@ -794,8 +765,7 @@ class RawIngestor:
                     "order_line_id values."
                 )
             if (
-                spec.relative_path
-                == Path("run_3/late_arriving/orders.csv")
+                spec.relative_path == Path("run_3/late_arriving/orders.csv")
                 and len(rows) != 15
             ):
                 raise SchemaValidationError(
@@ -806,8 +776,7 @@ class RawIngestor:
         self, prepared_files: Sequence[PreparedFile]
     ) -> None:
         prepared_by_path = {
-            prepared.spec.relative_path: prepared
-            for prepared in prepared_files
+            prepared.spec.relative_path: prepared for prepared in prepared_files
         }
         if set(prepared_by_path) != set(FILE_SPEC_BY_PATH):
             raise SchemaValidationError(
@@ -822,8 +791,7 @@ class RawIngestor:
         initial_keys = {str(row.typed_values[0]) for row in initial_rows}
         if len(initial_rows) != 5_000 or len(initial_keys) != 5_000:
             raise SchemaValidationError(
-                "The ordinary runs must contain 5,000 distinct order_line_id "
-                "values."
+                "The ordinary runs must contain 5,000 distinct order_line_id values."
             )
         late_keys = {str(row.typed_values[0]) for row in late.rows}
         run_1_keys = {str(row.typed_values[0]) for row in run_1.rows}
@@ -832,10 +800,7 @@ class RawIngestor:
                 "The late-arriving file must contain 10 new keys."
             )
         existing_late_keys = late_keys & initial_keys
-        if (
-            len(existing_late_keys) != 5
-            or not existing_late_keys <= run_1_keys
-        ):
+        if len(existing_late_keys) != 5 or not existing_late_keys <= run_1_keys:
             raise SchemaValidationError(
                 "The late-arriving file must contain five Run 1 corrections."
             )
@@ -844,14 +809,9 @@ class RawIngestor:
                 "The complete raw input must contain 5,010 distinct "
                 "order_line_id values."
             )
-        latest_run_2_updated_at = max(
-            row.typed_values[8] for row in run_2.rows
-        )
+        latest_run_2_updated_at = max(row.typed_values[8] for row in run_2.rows)
         self._validate_late_insert_timestamps(
-            {
-                str(row.typed_values[0]): row.typed_values
-                for row in late.rows
-            },
+            {str(row.typed_values[0]): row.typed_values for row in late.rows},
             late_keys - initial_keys,
             latest_run_2_updated_at,
         )
@@ -863,9 +823,7 @@ class RawIngestor:
         late: PreparedFile,
         correction_keys: set[str],
     ) -> None:
-        originals = {
-            str(row.typed_values[0]): row.typed_values for row in run_1.rows
-        }
+        originals = {str(row.typed_values[0]): row.typed_values for row in run_1.rows}
         correction_rows = {
             str(row.typed_values[0]): row.typed_values
             for row in late.rows
@@ -889,8 +847,7 @@ class RawIngestor:
             return
 
         candidate_by_key = {
-            str(row.typed_values[0]): row.typed_values
-            for row in prepared_file.rows
+            str(row.typed_values[0]): row.typed_values for row in prepared_file.rows
         }
         existing_rows = connection.execute(
             """
@@ -948,9 +905,7 @@ class RawIngestor:
         correction_originals: dict[str, tuple[object, ...]] = {}
         for key in existing_keys:
             matching_rows = existing_by_key[key]
-            run_1_rows = [
-                row for row in matching_rows if row[9] == "run_1"
-            ]
+            run_1_rows = [row for row in matching_rows if row[9] == "run_1"]
             if len(run_1_rows) != 1 or len(matching_rows) != 1:
                 raise SchemaValidationError(
                     "The late-arriving batch must correct five keys found "
@@ -1000,10 +955,7 @@ class RawIngestor:
     ) -> None:
         """Validate a complete correction against its original Run 1 row."""
 
-        if not all(
-            correction[index] == original[index]
-            for index in preserved_indexes
-        ):
+        if not all(correction[index] == original[index] for index in preserved_indexes):
             raise SchemaValidationError(
                 f"Correction {key} changes a preserved business field."
             )
@@ -1016,9 +968,7 @@ class RawIngestor:
                 f"Correction {key} must have a later updated_at."
             )
 
-    def _validate_database_schema(
-        self, connection: duckdb.DuckDBPyConnection
-    ) -> None:
+    def _validate_database_schema(self, connection: duckdb.DuckDBPyConnection) -> None:
         rows = connection.execute(
             """
             SELECT table_name, column_name, data_type, is_nullable
@@ -1044,8 +994,7 @@ class RawIngestor:
         }
         if actual != expected:
             raise SchemaValidationError(
-                f"Raw database schema mismatch: expected {expected}, "
-                f"received {actual}."
+                f"Raw database schema mismatch: expected {expected}, received {actual}."
             )
         constraints = {
             (table_name, constraint_type, tuple(column_names))
@@ -1064,8 +1013,7 @@ class RawIngestor:
         missing_constraints = EXPECTED_KEY_CONSTRAINTS - constraints
         if missing_constraints:
             raise SchemaValidationError(
-                f"Raw database constraints are missing: "
-                f"{sorted(missing_constraints)}."
+                f"Raw database constraints are missing: {sorted(missing_constraints)}."
             )
 
     def _manifest_for_source(
@@ -1116,12 +1064,10 @@ class RawIngestor:
         )
         if manifest != expected_manifest:
             raise IngestionError(
-                f"Manifest metadata is inconsistent for "
-                f"{prepared_file.source_file}."
+                f"Manifest metadata is inconsistent for {prepared_file.source_file}."
             )
-        raw_count, source_row_count, matching_metadata, hash_count = (
-            connection.execute(
-                f"""
+        raw_count, source_row_count, matching_metadata, hash_count = connection.execute(
+            f"""
                 SELECT
                     COUNT(*),
                     COUNT(DISTINCT source_row_number),
@@ -1134,14 +1080,13 @@ class RawIngestor:
                 FROM raw.{prepared_file.spec.table_name}
                 WHERE ingestion_id = ?
                 """,
-                [
-                    prepared_file.file_checksum,
-                    prepared_file.source_file,
-                    prepared_file.spec.source_run,
-                    ingestion_id,
-                ],
-            ).fetchone()
-        )
+            [
+                prepared_file.file_checksum,
+                prepared_file.source_file,
+                prepared_file.spec.source_run,
+                ingestion_id,
+            ],
+        ).fetchone()
         if (
             raw_count != row_count
             or source_row_count != row_count
@@ -1199,9 +1144,8 @@ class RawIngestor:
         connection: duckdb.DuckDBPyConnection,
         prepared_file: PreparedFile,
     ) -> None:
-        row_count, source_row_count, checksum_count, hash_count = (
-            connection.execute(
-                f"""
+        row_count, source_row_count, checksum_count, hash_count = connection.execute(
+            f"""
                 SELECT
                     COUNT(*),
                     COUNT(DISTINCT source_row_number),
@@ -1210,9 +1154,8 @@ class RawIngestor:
                 FROM raw.{prepared_file.spec.table_name}
                 WHERE ingestion_id = ?
                 """,
-                [prepared_file.ingestion_id],
-            ).fetchone()
-        )
+            [prepared_file.ingestion_id],
+        ).fetchone()
         expected_count = len(prepared_file.rows)
         if (
             row_count != expected_count
@@ -1262,9 +1205,8 @@ class RawIngestor:
         connection: duckdb.DuckDBPyConnection,
         prepared_file: PreparedFile,
     ) -> None:
-        manifest_count, manifest_rows, raw_rows, matching_rows = (
-            connection.execute(
-                f"""
+        manifest_count, manifest_rows, raw_rows, matching_rows = connection.execute(
+            f"""
                 SELECT
                     COUNT(DISTINCT m.ingestion_id),
                     COALESCE(MAX(m.row_count), 0),
@@ -1286,9 +1228,8 @@ class RawIngestor:
                     m.source_run,
                     m.ingested_at
                 """,
-                [prepared_file.ingestion_id],
-            ).fetchone()
-        )
+            [prepared_file.ingestion_id],
+        ).fetchone()
         expected_count = len(prepared_file.rows)
         if (
             manifest_count != 1

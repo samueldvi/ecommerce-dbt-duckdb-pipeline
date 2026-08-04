@@ -101,9 +101,7 @@ class QueryResult:
     rows: tuple[tuple[object, ...], ...]
 
     def records(self) -> list[dict[str, object]]:
-        return [
-            dict(zip(self.columns, row, strict=True)) for row in self.rows
-        ]
+        return [dict(zip(self.columns, row, strict=True)) for row in self.rows]
 
 
 @dataclass(frozen=True)
@@ -183,9 +181,7 @@ def open_read_only_database(
     """Open one short-lived read-only connection and always close it."""
 
     if not path.is_file():
-        raise DatabaseUnavailableError(
-            "The configured DuckDB database does not exist."
-        )
+        raise DatabaseUnavailableError("The configured DuckDB database does not exist.")
     try:
         connection = duckdb.connect(str(path), read_only=True)
     except Exception as error:
@@ -209,9 +205,7 @@ def _required_columns(schema: str) -> dict[tuple[str, str], set[str]]:
     }
 
 
-def validate_database(
-    connection: duckdb.DuckDBPyConnection, schema: str
-) -> None:
+def validate_database(connection: duckdb.DuckDBPyConnection, schema: str) -> None:
     """Verify required tables and columns before running dashboard queries."""
 
     expected = _required_columns(schema)
@@ -291,9 +285,7 @@ def load_dashboard_metadata(config: DashboardConfig) -> DashboardMetadata:
     except (DatabaseUnavailableError, DatabaseIncompleteError):
         raise
     except Exception as error:
-        raise DashboardQueryError(
-            "Dashboard metadata could not be loaded."
-        ) from error
+        raise DashboardQueryError("Dashboard metadata could not be loaded.") from error
 
 
 def load_dashboard_snapshot(
@@ -321,9 +313,7 @@ def load_dashboard_snapshot(
                     connection,
                     query,
                     schema=config.dbt_schema,
-                    parameters=(
-                        parameters if name in FILTERED_QUERY_NAMES else ()
-                    ),
+                    parameters=(parameters if name in FILTERED_QUERY_NAMES else ()),
                 )
                 for name, query in QUERY_BY_NAME.items()
             }

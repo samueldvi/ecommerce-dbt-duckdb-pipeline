@@ -103,9 +103,7 @@ class AnalyticsTests(unittest.TestCase):
 
         cls._run_dbt("build")
         cls._run_dbt("compile", "--select", "path:analyses")
-        cls.results = {
-            name: cls._execute_analysis(name) for name in ANALYSIS_COLUMNS
-        }
+        cls.results = {name: cls._execute_analysis(name) for name in ANALYSIS_COLUMNS}
 
     @classmethod
     def _run_dbt(cls, command: str, *arguments: str) -> None:
@@ -232,9 +230,7 @@ class AnalyticsTests(unittest.TestCase):
         }
         for name in ANALYSIS_COLUMNS:
             with self.subTest(analysis=name):
-                source = (ANALYSES_ROOT / f"{name}.sql").read_text(
-                    encoding="utf-8"
-                )
+                source = (ANALYSES_ROOT / f"{name}.sql").read_text(encoding="utf-8")
                 self.assertIn("facts.revenue", source)
                 self.assertTrue(
                     forbidden_business_columns.isdisjoint(
@@ -266,9 +262,7 @@ class AnalyticsTests(unittest.TestCase):
         snapshot = self._mart_snapshot()
         products = {row[0]: row[1] for row in snapshot["products"]}
         dates = {row[0]: row[1] for row in snapshot["dates"]}
-        expected_totals: defaultdict[tuple[date, str], Decimal] = defaultdict(
-            Decimal
-        )
+        expected_totals: defaultdict[tuple[date, str], Decimal] = defaultdict(Decimal)
         contributing_source_files: set[str] = set()
         for (
             _order_line_id,
@@ -290,9 +284,7 @@ class AnalyticsTests(unittest.TestCase):
             (month, category, total)
             for (month, category), total in sorted(expected_totals.items())
         )
-        self.assertEqual(
-            self.results["revenue_by_category_month"][1], expected
-        )
+        self.assertEqual(self.results["revenue_by_category_month"][1], expected)
         self.assertIn("Unknown", {row[1] for row in expected})
         self.assertTrue(
             {
@@ -385,9 +377,7 @@ class AnalyticsTests(unittest.TestCase):
         positions = {
             month: {
                 total: position
-                for position, total in enumerate(
-                    sorted(totals, reverse=True), start=1
-                )
+                for position, total in enumerate(sorted(totals, reverse=True), start=1)
             }
             for month, totals in totals_by_month.items()
         }
@@ -405,9 +395,7 @@ class AnalyticsTests(unittest.TestCase):
                 key=lambda row: (row[0], row[3], row[1]),
             )
         )
-        self.assertEqual(
-            self.results["monthly_category_revenue_ranking"][1], expected
-        )
+        self.assertEqual(self.results["monthly_category_revenue_ranking"][1], expected)
         self.assertEqual(
             {(row[0], row[1]) for row in expected},
             {(row[0], row[1]) for row in revenue_rows},

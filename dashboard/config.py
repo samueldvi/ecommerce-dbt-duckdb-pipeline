@@ -50,18 +50,14 @@ def resolve_database_path(
         DATABASE_PATH_ENV, str(DEFAULT_DATABASE_RELATIVE_PATH)
     ).strip()
     if not raw_path:
-        raise DashboardConfigurationError(
-            f"{DATABASE_PATH_ENV} must not be empty."
-        )
+        raise DashboardConfigurationError(f"{DATABASE_PATH_ENV} must not be empty.")
     path = Path(raw_path).expanduser()
     if not path.is_absolute():
         path = project_root / path
     return path.resolve(strict=False)
 
 
-def resolve_dbt_schema(
-    *, environ: Mapping[str, str] | None = None
-) -> str:
+def resolve_dbt_schema(*, environ: Mapping[str, str] | None = None) -> str:
     """Return a safe DuckDB schema identifier for mart queries."""
 
     environment = os.environ if environ is None else environ

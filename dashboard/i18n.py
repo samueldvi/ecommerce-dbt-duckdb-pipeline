@@ -54,8 +54,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "batch_empty": "Nessun caricamento di righe ordine registrato.",
         "quality_empty": "Nessuna metrica di qualità disponibile.",
         "data_status_note": (
-            "Lo stato descrive i dati persistiti, non un monitoraggio in "
-            "tempo reale."
+            "Lo stato descrive i dati persistiti, non un monitoraggio in tempo reale."
         ),
         "project_info": "Informazioni sul progetto",
         "project_architecture": (
